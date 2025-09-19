@@ -14,66 +14,131 @@ classdef NanionFileDetector < handle
         end
         
         function protocolInfo = detectProtocol(obj, filePath)
-        %DETECTPROTOCOL Simple protocol detection
-        
-        obj.logger.logInfo(sprintf('Detecting protocol for: %s', obj.getFileName(filePath)));
-        
-        try
-            % Read header section
-            headerData = readcell(filePath, 'Range', 'A1:ZZ15', 'UseExcel', false);
+            %DETECTPROTOCOL Bulletproof protocol detection
             
-            % Search for protocol keywords
-            protocolType = '';
-            for row = 1:size(headerData, 1)
-                rowText = strjoin(string(headerData(row, :)), ' ');
+            obj.logger.logInfo(sprintf('Detecting protocol for: %s', obj.getFileName(filePath)));
+            
+            try
+                % Read header section
+                headerData = readcell(filePath, 'Range', 'A1:ZZ15', 'UseExcel', false);
                 
-                if contains(rowText, 'Peak', 'IgnoreCase', true)
-                    protocolType = 'activation';
-                    break;
-                elseif contains(rowText, 'Inact', 'IgnoreCase', true) && contains(rowText, 'Act', 'IgnoreCase', true)
-                    protocolType = 'inactivation';
-                    break;
+                % Search for protocol keywords - completely bulletproof approach
+                protocolType = '';
+                
+                for row = 1:size(headerData, 1)
+                    % Convert entire row to one big string for searching
+                    rowCells = headerData(row, :);
+                    
+                    % Build search string from all cells - ultra safe approach
+                    searchStr = '';
+                    for col = 1:length(rowCells)
+                        cell_val = rowCells{col};
+                        
+                        % Ultra safe cell checking - avoid all logical operator issues
+                        try
+                            if isempty(cell_val)
+                                continue;
+                            end
+                            
+                            % Check for missing values safely
+                            if isnumeric(cell_val) && any(isnan(cell_val(:)))
+                                continue;
+                            end
+                            
+                            % Try to extract string content
+                            if ischar(cell_val)
+                                searchStr = [searchStr, ' ', cell_val];
+                            elseif isstring(cell_val) && ~ismissing(cell_val)
+                                searchStr = [searchStr, ' ', char(cell_val)];
+                            elseif isnumeric(cell_val) && ~any(isnan(cell_val(:)))
+                                searchStr = [searchStr, ' ', num2str(cell_val(1))]; % Just use first element
+                            end
+                        catch
+                            % If anything goes wrong with this cell, just skip it
+                            continue;
+                        end
+                    end
+                    
+                    % Simple keyword search on the combined string
+                    if contains(searchStr, 'Peak', 'IgnoreCase', true)
+                        protocolType = 'activation';
+                        obj.logger.logInfo(sprintf('Found activation keywords in row %d', row));
+                        break;
+                    end
+                    
+                    % Check for inactivation - separate checks to avoid logical issues
+                    hasInact = contains(searchStr, 'Inact', 'IgnoreCase', true);
+                    hasAct = contains(searchStr, 'Act', 'IgnoreCase', true);
+                    
+                    if hasInact && hasAct
+                        protocolType = 'inactivation';
+                        obj.logger.logInfo(sprintf('Found inactivation keywords in row %d', row));
+                        break;
+                    end
+                end
+                
+                if isempty(protocolType)
+                    obj.logger.logWarning('No protocol keywords found');
+                    protocolInfo = [];
+                    return;
+                end
+                
+                % Simple IV count and column mapping
+                numIVs = obj.calculateNumIVs(headerData);
+                columnMapping = obj.getColumnMapping(protocolType);
+                
+                protocolInfo = struct(...
+                    'type', protocolType, ...
+                    'numIVs', numIVs, ...
+                    'columnMapping', columnMapping);
+                
+                obj.logger.logInfo(sprintf('✓ Detected %s protocol with %d IVs', protocolType, numIVs));
+                
+            catch ME
+                obj.logger.logError(sprintf('Protocol detection failed: %s', ME.message));
+                protocolInfo = [];
+            end
+        end
+        end
+        
+        methods (Access = private)        
+            function numIVs = calculateNumIVs(obj, headerData)
+                %CALCULATENUMIVS Get total sweeps from Row 2, Col 2
+                
+                try
+                    % The total number of sweeps is in Row 2, Column 2
+                    totalSweeps = headerData{2, 2};
+                    
+                    if isempty(totalSweeps) || ismissing(totalSweeps)
+                        error('Row 2, Col 2 is empty or missing');
+                    end
+                    
+                    % Convert to number if it's text
+                    if ischar(totalSweeps) || isstring(totalSweeps)
+                        totalSweeps = str2double(totalSweeps);
+                    end
+                    
+                    if isnan(totalSweeps)
+                        error('Could not convert sweep count to number: %s', mat2str(headerData{2, 2}));
+                    end
+                    
+                    % Calculate IVs: ceil(total_sweeps / 23)
+                    numDataPoints = 23;
+                    numIVs = ceil(totalSweeps / numDataPoints);
+                    
+                    obj.logger.logInfo(sprintf('Found %d total sweeps in Row 2, Col 2', totalSweeps));
+                    obj.logger.logInfo(sprintf('Calculated %d IVs: ceil(%d sweeps / %d points per IV)', ...
+                        numIVs, totalSweeps, numDataPoints));
+                    
+                catch ME
+                    obj.logger.logError(sprintf('IV calculation failed: %s', ME.message));
+                    
+                    % Fallback to column-based estimate
+                    numCols = size(headerData, 2);
+                    numIVs = max(1, floor(numCols / 23));
+                    obj.logger.logWarning(sprintf('Using fallback: estimated %d IVs from %d columns / 23', numIVs, numCols));
                 end
             end
-            
-            if isempty(protocolType)
-                obj.logger.logWarning('No protocol keywords found');
-                protocolInfo = [];
-                return;
-            end
-            
-            % Simple IV count and column mapping
-            numIVs = obj.calculateNumIVs(headerData(1, :));
-            columnMapping = obj.getColumnMapping(protocolType);
-            
-            protocolInfo = struct(...
-                'type', protocolType, ...
-                'numIVs', numIVs, ...
-                'columnMapping', columnMapping);
-            
-            obj.logger.logInfo(sprintf('✓ Detected %s protocol with %d IVs', protocolType, numIVs));
-            
-        catch ME
-            obj.logger.logError(sprintf('Protocol detection failed: %s', ME.message));
-            protocolInfo = [];
-        end
-    end      
-    end
-    
-    methods (Access = private)        
-        function numIVs = calculateNumIVs(obj, headerRow1)
-        %CALCULATENUMIVS Simple IV calculation based on column count
-        
-        numCols = length(headerRow1);
-        
-        % Direct calculation based on known column patterns
-        % Activation: every 6 columns, Inactivation: every 7 columns
-        % Use conservative estimate of 6 columns per IV
-        numIVs = max(1, floor(numCols / 6));
-        
-        obj.logger.logInfo(sprintf('Estimated %d IVs from %d columns', numIVs, numCols));
-    end
-        
         function columnMapping = getColumnMapping(obj, protocolType)
             %GETCOLUMNMAPPING Get column patterns for protocol type
             
