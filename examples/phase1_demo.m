@@ -1,3 +1,36 @@
+%% ========================================================================
+%% NANION ANALYSIS - PHASE 1 REPOSITORY SETUP
+%% ========================================================================
+
+% REPOSITORY STRUCTURE:
+% nanion-analysis/
+% ├── src/
+% │   ├── pipeline/
+% │   │   └── NanionAnalysisPipeline.m       % Main controller (Phase 1)
+% │   ├── config/
+% │   │   └── NanionConfig.m                 % Configuration management (Phase 1)
+% │   ├── io/
+% │   │   ├── NanionIOManager.m              % File I/O operations (Phase 1) 
+% │   │   └── NanionFileDetector.m           % Protocol detection (Phase 1)
+% │   ├── processing/                        % Data extraction (Phase 2)
+% │   ├── filtering/                         % Quality filters (Phase 3)
+% │   ├── fitting/                          % Boltzmann fitting (Phase 3)
+% │   ├── plotting/                         % Visualization (Phase 4)
+% │   └── utils/
+% │       └── NanionLogger.m                 % Logging system (Phase 1)
+% ├── tests/                                % Unit tests (each phase)
+% ├── examples/
+% │   └── phase1_demo.m                     % Phase 1 demo script
+% ├── docs/                                 % Documentation
+% ├── configs/
+% │   ├── default_config.json               % Default parameters
+% │   └── dev_config.json                   % Development settings
+% └── README.md
+
+%% ========================================================================
+%% FILE: examples/phase1_demo.m  
+%% PHASE 1 DEMONSTRATION SCRIPT
+%% ========================================================================
 function phase1_demo()
     %PHASE1_DEMO Demonstrate Phase 1 infrastructure components
     %   Shows file validation, protocol detection, and basic data reading
@@ -22,11 +55,25 @@ function phase1_demo()
     %% 3. File Selection and Validation
     fprintf('3. Select files for analysis...\n');
     
+    % Set default location to user's data directory
+    defaultPath = 'C:\Users\xdach\OneDrive - Johns Hopkins\Maher_Lab\Protocols\Matlab_scripts\Fede\Master files for CHIN 9_17_2025';
+    
+    % Change to default directory if it exists
+    if exist(defaultPath, 'dir')
+        currentDir = pwd;
+        cd(defaultPath);
+    end
+    
     % Interactive file selection
     [filenames, pathname] = uigetfile(...
         {'*.xlsx;*.xls', 'Excel Files (*.xlsx, *.xls)'}, ...
         'Select Nanion Excel Files for Phase 1 Demo', ...
         'MultiSelect', 'on');
+    
+    % Restore original directory if we changed it
+    if exist('currentDir', 'var')
+        cd(currentDir);
+    end
     
     if isequal(filenames, 0)
         fprintf('No files selected. Demo terminated.\n');

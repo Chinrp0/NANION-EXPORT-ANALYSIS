@@ -20,33 +20,48 @@ classdef NanionFileDetector < handle
             obj.logger.logInfo(sprintf('Detecting protocol for: %s', obj.getFileName(filePath)));
             
             try
-                % Quick read of headers only (first ~10 rows)
-                headerData = readcell(filePath, 'Range', 'A1:ZZ10', 'UseExcel', false);
+                % Read first 15 rows to find keywords
+                headerData = readcell(filePath, 'Range', 'A1:ZZ15', 'UseExcel', false);
                 
-                % Find header structure
-                headerInfo = obj.findQuickHeaderStructure(headerData);
+                % Look for keywords in any row
+                protocolType = '';
+                keywordRow = 0;
                 
-                if isempty(headerInfo)
-                    obj.logger.logWarning('Cannot find header structure for protocol detection');
-                    protocolInfo = [];
-                    return;
+                for row = 1:size(headerData, 1)
+                    rowData = headerData(row, :);
+                    
+                    % Convert all cells to strings for searching
+                    rowStrings = {};
+                    for col = 1:size(rowData, 2)
+                        cell_val = rowData{col};
+                        if ischar(cell_val) || isstring(cell_val)
+                            rowStrings{end+1} = char(cell_val);
+                        end
+                    end
+                    
+                    % Join all strings in the row
+                    rowText = strjoin(rowStrings, ' ');
+                    
+                    % Check for protocol markers
+                    if contains(rowText, 'Peak', 'IgnoreCase', true)
+                        protocolType = 'activation';
+                        keywordRow = row;
+                        break;
+                    elseif contains(rowText, 'Inact', 'IgnoreCase', true) && contains(rowText, 'Act', 'IgnoreCase', true)
+                        protocolType = 'inactivation';
+                        keywordRow = row;
+                        break;
+                    end
                 end
-                
-                % Extract header rows
-                headerRow2 = headerData(headerInfo.headerRow2Idx, :);
-                headerRow1 = headerData(headerInfo.headerRow1Idx, :);
-                
-                % Detect protocol type
-                protocolType = obj.detectProtocolType(headerRow2);
                 
                 if isempty(protocolType)
-                    obj.logger.logWarning('Cannot determine protocol type');
+                    obj.logger.logWarning('No protocol keywords found');
                     protocolInfo = [];
                     return;
                 end
                 
-                % Calculate number of IVs
-                numIVs = obj.calculateNumIVs(headerRow1);
+                % Calculate number of IVs - simplified approach
+                numIVs = obj.calculateNumIVs(headerData(1, :));
                 
                 % Get column mapping
                 columnMapping = obj.getColumnMapping(protocolType);
@@ -55,10 +70,10 @@ classdef NanionFileDetector < handle
                     'type', protocolType, ...
                     'numIVs', numIVs, ...
                     'columnMapping', columnMapping, ...
-                    'headerInfo', headerInfo);
+                    'keywordRow', keywordRow);
                 
-                obj.logger.logInfo(sprintf('✓ Detected %s protocol with %d IVs', ...
-                    protocolType, numIVs));
+                obj.logger.logInfo(sprintf('✓ Detected %s protocol with %d IVs (keywords in row %d)', ...
+                    protocolType, numIVs, keywordRow));
                 
             catch ME
                 obj.logger.logError(sprintf('Protocol detection failed: %s', ME.message));
@@ -104,63 +119,7 @@ classdef NanionFileDetector < handle
         end
     end
     
-    methods (Access = private)
-        function headerInfo = findQuickHeaderStructure(obj, headerData)
-            %FINDQUICKHEADERSTRUCTURE Find headers in limited data
-            
-            if size(headerData, 1) < 3
-                headerInfo = [];
-                return;
-            end
-            
-            col1 = headerData(:, 1);
-            
-            % Look for empty cell pattern
-            emptyIdx = [];
-            for i = 1:length(col1)
-                if obj.isEmptyCell(col1{i})
-                    emptyIdx = i;
-                    break;
-                end
-            end
-            
-            if isempty(emptyIdx) || emptyIdx + 2 > size(headerData, 1)
-                headerInfo = [];
-                return;
-            end
-            
-            headerInfo = struct(...
-                'emptyRowIdx', emptyIdx, ...
-                'headerRow1Idx', emptyIdx + 1, ...
-                'headerRow2Idx', emptyIdx + 2);
-        end
-        
-        function protocolType = detectProtocolType(obj, headerRow2)
-            %DETECTPROTOCOLTYPE Determine protocol from header keywords
-            
-            protocolType = '';
-            
-            % Convert headers to string array for analysis
-            headerStrings = obj.convertToStringArray(headerRow2);
-            
-            % Check for activation markers
-            activationMarkers = {'Peak'};
-            hasActivation = any(contains(headerStrings, activationMarkers, 'IgnoreCase', true));
-            
-            % Check for inactivation markers
-            inactivationMarkers = {'Inact', 'Act'};
-            hasInactivation = any(contains(headerStrings, inactivationMarkers, 'IgnoreCase', true));
-            
-            if hasActivation && ~hasInactivation
-                protocolType = 'activation';
-            elseif hasInactivation
-                % Inactivation files can have both 'Inact' and 'Act' columns
-                protocolType = 'inactivation';
-            else
-                obj.logger.logWarning('No clear protocol markers found in headers');
-            end
-        end
-        
+    methods (Access = private)        
         function numIVs = calculateNumIVs(obj, headerRow1)
             %CALCULATENUMIVS Calculate number of IV groups
             
