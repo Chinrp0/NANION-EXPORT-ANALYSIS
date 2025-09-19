@@ -6,7 +6,6 @@ classdef NanionIOManager < handle
     properties (Access = private)
         config
         logger
-        fileValidator
     end
     
     methods
@@ -19,7 +18,7 @@ classdef NanionIOManager < handle
             
             obj.config = config;
             obj.logger = logger;
-            obj.fileValidator = NanionFileValidator(logger);
+            % Note: File validation is handled internally in Phase 1
         end
         
         function rawData = readFile(obj, filePath)
