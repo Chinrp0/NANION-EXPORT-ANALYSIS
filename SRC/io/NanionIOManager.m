@@ -133,185 +133,85 @@ classdef NanionIOManager < handle
         end
         
         function validateRawData(obj, rawData, filePath)
-            %VALIDATERAWDATA Post-read data validation
-            
-            if isempty(rawData)
-                error('NanionIOManager:EmptyFile', 'File contains no data: %s', filePath);
-            end
-            
-            if size(rawData, 1) < 10
-                error('NanionIOManager:InsufficientData', 'File has too few rows (%d): %s', ...
-                    size(rawData, 1), filePath);
-            end
-            
-            if size(rawData, 2) < 20
-                error('NanionIOManager:InsufficientColumns', 'File has too few columns (%d): %s', ...
-                    size(rawData, 2), filePath);
-            end
-            
-            % Check for reasonable data density
-            nonEmptyCells = sum(~cellfun(@isempty, rawData(:)));
-            totalCells = numel(rawData);
-            dataDensity = nonEmptyCells / totalCells;
-            
-            if dataDensity < 0.1
-                obj.logger.logWarning(sprintf('Low data density (%.1f%%) in file', dataDensity * 100));
-            end
-            
-            obj.logger.logInfo(sprintf('Data validation passed: %.1f%% density', dataDensity * 100));
+        %VALIDATERAWDATA Simple post-read data validation
+        
+        if isempty(rawData)
+            error('NanionIOManager:EmptyFile', 'File contains no data: %s', filePath);
         end
         
+        if size(rawData, 1) < 10
+            error('NanionIOManager:InsufficientData', 'File has too few rows (%d): %s', ...
+                size(rawData, 1), filePath);
+        end
+        
+        if size(rawData, 2) < 20
+            error('NanionIOManager:InsufficientColumns', 'File has too few columns (%d): %s', ...
+                size(rawData, 2), filePath);
+        end
+        
+        obj.logger.logInfo(sprintf('Data validation passed: %dx%d', size(rawData)));
+    end
+        
         function headerInfo = findHeaderStructure(obj, rawData)
-            %FINDHEADERSTRUCTURE Locate header rows in data
-            %   Simple approach: look for known header text
+            %FINDHEADERSTRUCTURE Simple header detection
             
-            headerRow1Idx = [];
-            headerRow2Idx = [];
+            % Convert first column to strings for searching
+            col1Strings = string(rawData(1:min(15, size(rawData,1)), 1));
+            col1Strings(ismissing(col1Strings)) = "";
             
-            % Search for "Sweep Results" and "Parameter" in column 1
-            for row = 1:min(15, size(rawData, 1))
-                cellValue = rawData{row, 1};
-                
-                if ischar(cellValue) || isstring(cellValue)
-                    cellText = char(cellValue);
-                    
-                    if contains(cellText, 'Sweep Results', 'IgnoreCase', true)
-                        headerRow1Idx = row;
-                    elseif contains(cellText, 'Parameter', 'IgnoreCase', true)
-                        headerRow2Idx = row;
-                    end
-                end
-            end
+            % Find header rows
+            sweepRow = find(contains(col1Strings, 'Sweep Results', 'IgnoreCase', true), 1);
+            paramRow = find(contains(col1Strings, 'Parameter', 'IgnoreCase', true), 1);
             
-            % Validate we found both headers
-            if isempty(headerRow1Idx) || isempty(headerRow2Idx)
+            if isempty(sweepRow) || isempty(paramRow)
                 error('NanionIOManager:HeadersNotFound', ...
-                    'Could not find "Sweep Results" or "Parameter" headers in file');
+                    'Could not find required headers in file');
             end
             
             headerInfo = struct(...
-                'headerRow1Idx', headerRow1Idx, ...     % "Sweep Results" row
-                'headerRow2Idx', headerRow2Idx, ...     % "Parameter" row  
-                'dataStartRow', headerRow2Idx + 2);     % Data starts 2 rows after "Parameter"
+                'headerRow1Idx', sweepRow, ...
+                'headerRow2Idx', paramRow, ...
+                'dataStartRow', paramRow + 2);
             
-            obj.logger.logInfo(sprintf('Found headers: "Sweep Results" at row %d, "Parameter" at row %d, data starts row %d', ...
-                headerRow1Idx, headerRow2Idx, headerInfo.dataStartRow));
+            obj.logger.logInfo(sprintf('Headers found: Sweep=%d, Param=%d, Data=%d', ...
+                sweepRow, paramRow, headerInfo.dataStartRow));
         end
         
         function headers = extractHeaders(obj, rawData, headerInfo)
-            %EXTRACTHEADERS Extract and clean header information - ultra simple
+            %EXTRACTHEADERS Create simple column headers
             
-            % Just use generic column names for Phase 1
             numCols = size(rawData, 2);
-            
-            % Create simple headers
-            combinedHeaders = cell(1, numCols);
-            for i = 1:numCols
-                combinedHeaders{i} = sprintf('Col_%d', i);
-            end
+            combinedHeaders = arrayfun(@(x) sprintf('Col_%d', x), 1:numCols, 'UniformOutput', false);
             
             headers = struct(...
-                'row1', {}, ...
-                'row2', {}, ...
                 'combined', combinedHeaders);
             
-            obj.logger.logInfo(sprintf('Generated %d simple column headers (Col_1, Col_2, etc.)', numCols));
+            obj.logger.logInfo(sprintf('Generated %d column headers', numCols));
         end
         
-        function cleanRow = cleanHeaderRow(obj, rawRow)
-            %CLEANHEADERROW Clean and standardize header row - simplified
-            
-            cleanRow = cell(size(rawRow));
-            
-            for i = 1:length(rawRow)
-                cellValue = rawRow{i};
-                
-                if isempty(cellValue)
-                    cleanRow{i} = '';
-                elseif isnumeric(cellValue)
-                    cleanRow{i} = num2str(cellValue);
-                elseif ischar(cellValue) || isstring(cellValue)
-                    cleanRow{i} = char(strtrim(string(cellValue)));
-                else
-                    cleanRow{i} = '';
-                end
-            end
-        end
-        
-        function header = createValidTableHeader(obj, row1Val, row2Val, colIdx)
-            %CREATEVALIDTABLEHEADER Create valid MATLAB table header
-            
-            % Ensure inputs are strings
-            if isempty(row1Val) || ismissing(row1Val)
-                row1Val = '';
-            else
-                row1Val = char(row1Val);
-            end
-            
-            if isempty(row2Val) || ismissing(row2Val)
-                row2Val = '';
-            else
-                row2Val = char(row2Val);
-            end
-            
-            % Simple combination
-            if isempty(row1Val) && isempty(row2Val)
-                header = sprintf('Column_%d', colIdx);
-            else
-                combined = strtrim([row1Val, '_', row2Val]);
-                
-                % Make valid MATLAB variable name - simple approach
-                header = regexprep(combined, '[^a-zA-Z0-9_]', '_');
-                
-                % Ensure it starts with letter
-                if ~isempty(header) && ~isletter(header(1))
-                    header = ['Col_', header];
-                end
-                
-                % Ensure it's not empty
-                if isempty(header)
-                    header = sprintf('Column_%d', colIdx);
-                end
-            end
-        end
         
         function dataTable = createDataTable(obj, rawData, headerInfo, headers)
-            %CREATEDATATABLE Create MATLAB table from raw data
-            
-            % Extract data portion
-            dataRows = rawData(headerInfo.dataStartRow:end, :);
-            
-            % Ensure headers and data columns match
-            numDataCols = size(dataRows, 2);
-            numHeaderCols = length(headers.combined);
-            
-            obj.logger.logInfo(sprintf('Data columns: %d, Header columns: %d', numDataCols, numHeaderCols));
-            
-            if numDataCols > numHeaderCols
-                % Trim data to header length
-                dataRows = dataRows(:, 1:numHeaderCols);
-                obj.logger.logInfo(sprintf('Trimmed data to %d columns to match headers', numHeaderCols));
-            elseif numHeaderCols > numDataCols
-                % Trim headers to data length
-                headers.combined = headers.combined(1:numDataCols);
-                obj.logger.logInfo(sprintf('Trimmed headers to %d columns to match data', numDataCols));
-            end
-            
-            % Create table with simple approach
-            try
-                dataTable = array2table(dataRows, 'VariableNames', headers.combined);
-                obj.logger.logInfo(sprintf('✓ Table created successfully: %dx%d', size(dataTable)));
-            catch ME
-                obj.logger.logError(sprintf('Table creation failed: %s', ME.message));
-                
-                % Fallback: create generic headers that definitely work
-                numCols = size(dataRows, 2);
-                genericHeaders = arrayfun(@(x) sprintf('Col_%d', x), 1:numCols, 'UniformOutput', false);
-                
-                obj.logger.logInfo('Using generic column headers as fallback');
-                dataTable = array2table(dataRows, 'VariableNames', genericHeaders);
-            end
+        %CREATEDATATABLE Create MATLAB table from raw data
+        
+        % Extract data portion
+        dataRows = rawData(headerInfo.dataStartRow:end, :);
+        
+        % Match column counts
+        numDataCols = size(dataRows, 2);
+        numHeaderCols = length(headers.combined);
+        
+        if numDataCols ~= numHeaderCols
+            minCols = min(numDataCols, numHeaderCols);
+            dataRows = dataRows(:, 1:minCols);
+            headers.combined = headers.combined(1:minCols);
+            obj.logger.logInfo(sprintf('Adjusted to %d columns', minCols));
         end
+        
+        % Create table - this should always work with our simple headers
+        dataTable = array2table(dataRows, 'VariableNames', headers.combined);
+        obj.logger.logInfo(sprintf('✓ Table created: %dx%d', size(dataTable)));
+    end
+
         
         function batchData = readFilesBatchSequential(obj, filePaths, protocolInfos)
             %READFILESBATCHSEQUENTIAL Sequential batch processing
@@ -384,14 +284,6 @@ classdef NanionIOManager < handle
             end
         end
         
-        function isEmpty = isEmptyCell(obj, cellValue)
-            %ISEMPTYCELL Check if cell value is empty
-            
-            isEmpty = isempty(cellValue) || ...
-                      (isnumeric(cellValue) && isnan(cellValue)) || ...
-                      (ischar(cellValue) && isempty(strtrim(cellValue))) || ...
-                      (isstring(cellValue) && (ismissing(cellValue) || strtrim(cellValue) == ""));
-        end
         
         function fileName = getFileName(obj, filePath)
             %GETFILENAME Extract filename from path

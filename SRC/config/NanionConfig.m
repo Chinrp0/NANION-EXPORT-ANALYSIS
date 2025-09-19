@@ -124,22 +124,29 @@ classdef NanionConfig < handle
         end
         
         function summary = getSummary(obj)
-            %GETSUMMARY Get configuration summary string
-            
-            summary = sprintf(['Configuration Summary:\n' ...
-                '  Data Points per IV: %d\n' ...
-                '  Nernst Potential: %.1f mV\n' ...
-                '  Series R Threshold: %.1f MΩ\n' ...
-                '  Seal R Threshold: %.1f GΩ\n' ...
-                '  Capacitance Threshold: %.1f pF\n' ...
-                '  Boltzmann R² Threshold: %.2f\n' ...
-                '  Parallel Processing: %s\n' ...
-                '  Max Workers: %d'], ...
-                obj.numDataPoints, obj.nernstPotential, ...
-                obj.filters.maxSeriesResistance, obj.filters.maxSealResistance, ...
-                obj.filters.maxCapacitance, obj.boltzmann.corrThreshold, ...
-                obj.yesNo(obj.processing.useParallel), obj.processing.maxWorkers);
+        %GETSUMMARY Get configuration summary string
+        
+        % Simple inline replacement for deleted yesNo() method
+        if obj.processing.useParallel
+            parallelStr = 'Yes';
+        else
+            parallelStr = 'No';
         end
+        
+        summary = sprintf(['Configuration Summary:\n' ...
+            '  Data Points per IV: %d\n' ...
+            '  Nernst Potential: %.1f mV\n' ...
+            '  Series R Threshold: %.1f MΩ\n' ...
+            '  Seal R Threshold: %.1f GΩ\n' ...
+            '  Capacitance Threshold: %.1f pF\n' ...
+            '  Boltzmann R² Threshold: %.2f\n' ...
+            '  Parallel Processing: %s\n' ...
+            '  Max Workers: %d'], ...
+            obj.numDataPoints, obj.nernstPotential, ...
+            obj.filters.maxSeriesResistance, obj.filters.maxSealResistance, ...
+            obj.filters.maxCapacitance, obj.boltzmann.corrThreshold, ...
+            parallelStr, obj.processing.maxWorkers);
+    end
     end
     
     methods (Access = private)
@@ -268,117 +275,45 @@ classdef NanionConfig < handle
             %VALIDATECONFIGURATION Validate all configuration parameters
             
             try
-                obj.validateAnalysisParams();
-                obj.validateFilterParams();
-                obj.validateBoltzmannParams();
-                obj.validatePlottingParams();
-                obj.validateProcessingParams();
-                obj.validateIOParams();
-                obj.validateProtocolParams();
+                p = obj.configData;
                 
+                % Analysis parameters
+                assert(isnumeric(p.analysis.numDataPoints) && p.analysis.numDataPoints > 0, ...
+                    'numDataPoints must be positive integer');
+                assert(isnumeric(p.analysis.nernstPotential) && abs(p.analysis.nernstPotential) < 200, ...
+                    'nernstPotential must be reasonable voltage value');
+                    
+                % Filter parameters
+                assert(isnumeric(p.filters.maxSeriesResistance) && p.filters.maxSeriesResistance > 0, ...
+                    'maxSeriesResistance must be positive');
+                assert(isnumeric(p.filters.maxSealResistance) && p.filters.maxSealResistance > 0, ...
+                    'maxSealResistance must be positive');
+                assert(isnumeric(p.filters.maxCapacitance) && p.filters.maxCapacitance > 0, ...
+                    'maxCapacitance must be positive');
+                    
+                % Boltzmann parameters
+                assert(isnumeric(p.boltzmann.corrThreshold) && p.boltzmann.corrThreshold > 0 && p.boltzmann.corrThreshold <= 1, ...
+                    'corrThreshold must be between 0 and 1');
+                assert(isnumeric(p.boltzmann.slopeLimits) && length(p.boltzmann.slopeLimits) == 2, ...
+                    'slopeLimits must be 2-element array');
+                    
+                % Processing parameters
+                assert(islogical(p.processing.useParallel) || (isnumeric(p.processing.useParallel) && ismember(p.processing.useParallel, [0,1])), ...
+                    'useParallel must be logical');
+                assert(isnumeric(p.processing.maxWorkers) && p.processing.maxWorkers > 0, ...
+                    'maxWorkers must be positive integer');
+                    
+                % I/O parameters
+                validMethods = {'readcell'};
+                assert(ischar(p.io.readMethod) && ismember(p.io.readMethod, validMethods), ...
+                    'readMethod must be readcell');
+                    
                 obj.isValidated = true;
                 
             catch ME
                 obj.isValidated = false;
                 error('NanionConfig:ValidationFailed', 'Configuration validation failed: %s', ME.message);
             end
-        end
-        
-        function validateAnalysisParams(obj)
-            %VALIDATEANALYSISPARAMS Validate analysis parameters
-            
-            p = obj.configData.analysis;
-            
-            assert(isnumeric(p.numDataPoints) && p.numDataPoints > 0, ...
-                'numDataPoints must be positive integer');
-            assert(isnumeric(p.nernstPotential) && abs(p.nernstPotential) < 200, ...
-                'nernstPotential must be reasonable voltage value');
-        end
-        
-        function validateFilterParams(obj)
-            %VALIDATEFILTERPARAMS Validate filter parameters
-            
-            f = obj.configData.filters;
-            
-            assert(isnumeric(f.maxSeriesResistance) && f.maxSeriesResistance > 0, ...
-                'maxSeriesResistance must be positive');
-            assert(isnumeric(f.maxSealResistance) && f.maxSealResistance > 0, ...
-                'maxSealResistance must be positive');
-            assert(isnumeric(f.maxCapacitance) && f.maxCapacitance > 0, ...
-                'maxCapacitance must be positive');
-        end
-        
-        function validateBoltzmannParams(obj)
-            %VALIDATEBOLTZMANNPARAMS Validate Boltzmann parameters
-            
-            b = obj.configData.boltzmann;
-            
-            assert(isnumeric(b.corrThreshold) && b.corrThreshold > 0 && b.corrThreshold <= 1, ...
-                'corrThreshold must be between 0 and 1');
-            assert(isnumeric(b.slopeLimits) && length(b.slopeLimits) == 2, ...
-                'slopeLimits must be 2-element array');
-            assert(b.slopeLimits(1) < b.slopeLimits(2), ...
-                'slopeLimits must be [min, max]');
-            assert(isnumeric(b.activationVmidMax), ...
-                'activationVmidMax must be numeric');
-            assert(isnumeric(b.inactivationVmidRange) && length(b.inactivationVmidRange) == 2, ...
-                'inactivationVmidRange must be 2-element array');
-        end
-        
-        function validatePlottingParams(obj)
-            %VALIDATEPLOTTINGPARAMS Validate plotting parameters
-            
-            p = obj.configData.plotting;
-            
-            assert(isnumeric(p.figureSize) && length(p.figureSize) == 2, ...
-                'figureSize must be 2-element array');
-            assert(isnumeric(p.dpi) && p.dpi > 0, ...
-                'dpi must be positive');
-            assert(isnumeric(p.rowsPerFigure) && p.rowsPerFigure > 0, ...
-                'rowsPerFigure must be positive');
-            assert(isnumeric(p.colsPerFigure) && p.colsPerFigure > 0, ...
-                'colsPerFigure must be positive');
-        end
-        
-        function validateProcessingParams(obj)
-            %VALIDATEPROCESSINGPARAMS Validate processing parameters
-            
-            p = obj.configData.processing;
-            
-            assert(islogical(p.useParallel) || (isnumeric(p.useParallel) && ismember(p.useParallel, [0,1])), ...
-                'useParallel must be logical');
-            assert(isnumeric(p.maxWorkers) && p.maxWorkers > 0, ...
-                'maxWorkers must be positive integer');
-            assert(isnumeric(p.timeoutMinutes) && p.timeoutMinutes > 0, ...
-                'timeoutMinutes must be positive');
-        end
-        
-        function validateIOParams(obj)
-            %VALIDATEIOPARAMS Validate I/O parameters
-            
-            io = obj.configData.io;
-            
-            validMethods = {'readcell'};
-            assert(ischar(io.readMethod) && ismember(io.readMethod, validMethods), ...
-                'readMethod must be one of: %s', strjoin(validMethods, ', '));
-            assert(islogical(io.enableFallbacks) || (isnumeric(io.enableFallbacks) && ismember(io.enableFallbacks, [0,1])), ...
-                'enableFallbacks must be logical');
-        end
-        
-        function validateProtocolParams(obj)
-            %VALIDATEPROTOCOLPARAMS Validate protocol parameters
-            
-            protocols = obj.configData.protocols;
-            
-            % Validate activation protocol
-            a = protocols.activation;
-            assert(isnumeric(a.columnPattern) && a.columnPattern > 0, ...
-                'activation.columnPattern must be positive integer');
-            
-            % Validate inactivation protocol  
-            i = protocols.inactivation;
-            assert(isnumeric(i.columnPattern) && i.columnPattern > 0, ...
-                'inactivation.columnPattern must be positive integer');
         end
         
         function saveAsJSON(obj, filePath)
@@ -407,15 +342,6 @@ classdef NanionConfig < handle
         function saveAsYAML(obj, filePath)
             %SAVEASYAML Save configuration as YAML (not implemented)
             error('NanionConfig:YAMLNotImplemented', 'YAML export not implemented. Use JSON format.');
-        end
-        
-        function str = yesNo(~, logical_val)
-            %YESNO Convert logical to Yes/No string
-            if logical_val
-                str = 'Yes';
-            else
-                str = 'No';
-            end
-        end
+        end       
     end
 end
