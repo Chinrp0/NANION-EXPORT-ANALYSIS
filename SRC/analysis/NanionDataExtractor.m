@@ -2,7 +2,7 @@ classdef NanionDataExtractor < handle
     %NANIONDATAEXTRACTOR Extract electrophysiology measurements from parsed data
     %   Converts Col_X tables back to meaningful parameter measurements
     %   Maintains Well_ID mapping throughout the extraction process
-    %   NOW WITH PROPER UNIT CONVERSIONS
+    %   NOW WITH PROPER UNIT CONVERSIONS AND ENHANCED FILTER REPORTING
     
     properties (Access = private)
         config
@@ -52,32 +52,37 @@ classdef NanionDataExtractor < handle
         end
         
         function filteredData = applyQualityFilters(obj, extractedData)
-            %APPLYQUALITYFILTERS Apply series R, seal R, and capacitance filters
+            %APPLYQUALITYFILTERS Apply series R, seal R, and capacitance filters with IV2 fallback
             %   Input: extractedData from extractMeasurements()
-            %   Output: filteredData with quality filter results
+            %   Output: filteredData with quality filter results and detailed reporting
             
-            obj.logger.logInfo('Applying quality filters...');
+            obj.logger.logInfo('Applying quality filters with IV2 fallback...');
             
             measurements = extractedData.measurements;
             filters = obj.config.filters;
+            numWells = extractedData.numWells;
             
-            % Apply filters to IV1 only (as specified in requirements)
+            % Initialize quality assessment arrays
+            qualityMask = false(numWells, 1);
+            ivUsedForFiltering = strings(numWells, 1);  % Track which IV was used
+            
+            % Get IV1 and IV2 data
             iv1Data = measurements.iv1;
+            hasIV2 = isfield(measurements, 'iv2');
+            if hasIV2
+                iv2Data = measurements.iv2;
+            end
             
-            % Series Resistance filter (≤ maxSeriesResistance MΩ)
-            seriesRValid = iv1Data.seriesResistance <= filters.maxSeriesResistance;
+            % Apply filtering with IV2 fallback logic
+            for wellIdx = 1:numWells
+                [passed, ivUsed] = obj.assessWellQuality(iv1Data, iv2Data, wellIdx, filters, hasIV2);
+                qualityMask(wellIdx) = passed;
+                ivUsedForFiltering(wellIdx) = ivUsed;
+            end
             
-            % Seal Resistance filter (≤ maxSealResistance GΩ)  
-            sealRValid = iv1Data.sealResistance <= filters.maxSealResistance;
-            
-            % Capacitance filter (≤ maxCapacitance pF)
-            capacitanceValid = iv1Data.capacitance <= filters.maxCapacitance;
-            
-            % Combined filter: all criteria must pass
-            qualityMask = seriesRValid & sealRValid & capacitanceValid;
-            
-            % Create filter report
-            filterReport = obj.createFilterReport(extractedData.wellIDs, iv1Data, qualityMask, filters);
+            % Create enhanced filter report with IV fallback information
+            filterReport = obj.createIVFallbackFilterReport(extractedData.wellIDs, measurements, ...
+                qualityMask, ivUsedForFiltering, filters, hasIV2);
             
             % Apply mask to all measurements
             filteredMeasurements = obj.applyFilterMask(measurements, qualityMask);
@@ -87,12 +92,13 @@ classdef NanionDataExtractor < handle
                 'measurements', filteredMeasurements, ...
                 'protocolInfo', extractedData.protocolInfo, ...
                 'qualityMask', qualityMask, ...
+                'ivUsedForFiltering', ivUsedForFiltering(qualityMask), ...  % Track IV source
                 'filterReport', filterReport, ...
                 'numWellsPassed', sum(qualityMask), ...
                 'numWellsTotal', length(qualityMask));
             
-            obj.logger.logInfo(sprintf('✓ Quality filtering complete: %d/%d wells passed', ...
-                filteredData.numWellsPassed, filteredData.numWellsTotal));
+            % Log detailed filtering results
+            obj.logIVFallbackFilteringResults(filterReport, hasIV2);
         end
     end
     
@@ -280,21 +286,152 @@ classdef NanionDataExtractor < handle
             end
         end
         
-        function filterReport = createFilterReport(obj, wellIDs, iv1Data, qualityMask, filters)
-            %CREATEFILTERREPORT Generate detailed filter report
+        function [passed, ivUsed] = assessWellQuality(obj, iv1Data, iv2Data, wellIdx, filters, hasIV2)
+            %ASSESSWELLQUALITY Assess well quality with IV2 fallback logic
+            %   Returns: [passed, ivUsed] where ivUsed is 'iv1', 'iv2', or 'failed'
             
-            % Find wells that failed each filter
-            seriesFailures = find(iv1Data.seriesResistance > filters.maxSeriesResistance);
-            sealFailures = find(iv1Data.sealResistance > filters.maxSealResistance);
-            capacitanceFailures = find(iv1Data.capacitance > filters.maxCapacitance);
+            % First try IV1
+            iv1SeriesR = iv1Data.seriesResistance(wellIdx);
+            iv1SealR = iv1Data.sealResistance(wellIdx);
+            iv1Cap = iv1Data.capacitance(wellIdx);
             
+            % Check if IV1 has all required parameters and passes thresholds
+            iv1HasData = ~isnan(iv1SeriesR) && ~isnan(iv1SealR) && ~isnan(iv1Cap);
+            if iv1HasData
+                iv1PassesThresholds = (iv1SeriesR <= filters.maxSeriesResistance) && ...
+                                     (iv1SealR <= filters.maxSealResistance) && ...
+                                     (iv1Cap <= filters.maxCapacitance);
+                if iv1PassesThresholds
+                    passed = true;
+                    ivUsed = 'iv1';
+                    return;
+                end
+            end
+            
+            % If IV1 failed and IV2 is available, try IV2
+            if hasIV2
+                iv2SeriesR = iv2Data.seriesResistance(wellIdx);
+                iv2SealR = iv2Data.sealResistance(wellIdx);
+                iv2Cap = iv2Data.capacitance(wellIdx);
+                
+                % Check if IV2 has all required parameters and passes thresholds
+                iv2HasData = ~isnan(iv2SeriesR) && ~isnan(iv2SealR) && ~isnan(iv2Cap);
+                if iv2HasData
+                    iv2PassesThresholds = (iv2SeriesR <= filters.maxSeriesResistance) && ...
+                                         (iv2SealR <= filters.maxSealResistance) && ...
+                                         (iv2Cap <= filters.maxCapacitance);
+                    if iv2PassesThresholds
+                        passed = true;
+                        ivUsed = 'iv2';
+                        return;
+                    end
+                end
+            end
+            
+            % Both IVs failed or IV2 not available
+            passed = false;
+            if iv1HasData
+                ivUsed = 'iv1_threshold_fail';
+            elseif hasIV2 && ~isnan(iv2Data.seriesResistance(wellIdx))
+                ivUsed = 'iv2_threshold_fail';  
+            else
+                ivUsed = 'nan_failure';
+            end
+        end
+        
+        function filterReport = createIVFallbackFilterReport(obj, wellIDs, measurements, qualityMask, ivUsedForFiltering, filters, hasIV2)
+            %CREATEIVFALLBACKFILTERREPORT Generate filter report with IV fallback information
+            
+            numWells = length(wellIDs);
+            iv1Data = measurements.iv1;
+            
+            % Count IV usage
+            iv1Used = sum(ivUsedForFiltering == "iv1");
+            if hasIV2
+                iv2Used = sum(ivUsedForFiltering == "iv2");
+            else
+                iv2Used = 0;
+            end
+            
+            % Count failure types across both IVs
+            iv1SeriesRNaN = sum(isnan(iv1Data.seriesResistance));
+            iv1SealRNaN = sum(isnan(iv1Data.sealResistance));
+            iv1CapacitanceNaN = sum(isnan(iv1Data.capacitance));
+            
+            % Threshold failures (IV1 only for backward compatibility)
+            iv1SeriesRThresholdFail = sum(~isnan(iv1Data.seriesResistance) & (iv1Data.seriesResistance > filters.maxSeriesResistance));
+            iv1SealRThresholdFail = sum(~isnan(iv1Data.sealResistance) & (iv1Data.sealResistance > filters.maxSealResistance));
+            iv1CapacitanceThresholdFail = sum(~isnan(iv1Data.capacitance) & (iv1Data.capacitance > filters.maxCapacitance));
+            
+            % Create comprehensive filter report
             filterReport = struct(...
-                'totalWells', length(wellIDs), ...
+                'totalWells', numWells, ...
                 'passedWells', sum(qualityMask), ...
                 'failedWells', sum(~qualityMask), ...
-                'seriesFailures', struct('count', length(seriesFailures), 'wellIDs', wellIDs(seriesFailures)), ...
-                'sealFailures', struct('count', length(sealFailures), 'wellIDs', wellIDs(sealFailures)), ...
-                'capacitanceFailures', struct('count', length(capacitanceFailures), 'wellIDs', wellIDs(capacitanceFailures)));
+                'ivUsage', struct(...
+                    'iv1Used', iv1Used, ...
+                    'iv2Used', iv2Used, ...
+                    'iv2Available', hasIV2), ...
+                'nanFailures', struct(...
+                    'seriesR', struct('count', iv1SeriesRNaN, 'wellIDs', wellIDs(isnan(iv1Data.seriesResistance))), ...
+                    'sealR', struct('count', iv1SealRNaN, 'wellIDs', wellIDs(isnan(iv1Data.sealResistance))), ...
+                    'capacitance', struct('count', iv1CapacitanceNaN, 'wellIDs', wellIDs(isnan(iv1Data.capacitance)))), ...
+                'thresholdFailures', struct(...
+                    'seriesR', struct('count', iv1SeriesRThresholdFail, 'threshold', filters.maxSeriesResistance), ...
+                    'sealR', struct('count', iv1SealRThresholdFail, 'threshold', filters.maxSealResistance), ...
+                    'capacitance', struct('count', iv1CapacitanceThresholdFail, 'threshold', filters.maxCapacitance)), ...
+                'validDataCounts', struct(...
+                    'seriesR', sum(~isnan(iv1Data.seriesResistance)), ...
+                    'sealR', sum(~isnan(iv1Data.sealResistance)), ...
+                    'capacitance', sum(~isnan(iv1Data.capacitance))));
+        end
+        
+        function logIVFallbackFilteringResults(obj, filterReport, hasIV2)
+            %LOGIVFALLBACKFILTERINGRESULTS Log detailed filtering results with IV fallback info
+            
+            obj.logger.logInfo(sprintf('✓ Quality filtering complete: %d/%d wells passed', ...
+                filterReport.passedWells, filterReport.totalWells));
+            
+            % Log IV usage statistics
+            if hasIV2
+                obj.logger.logInfo('--- IV Usage for Quality Assessment ---');
+                obj.logger.logInfo(sprintf('IV1 used: %d wells (%.1f%%)', ...
+                    filterReport.ivUsage.iv1Used, ...
+                    100 * filterReport.ivUsage.iv1Used / filterReport.totalWells));
+                obj.logger.logInfo(sprintf('IV2 fallback used: %d wells (%.1f%%)', ...
+                    filterReport.ivUsage.iv2Used, ...
+                    100 * filterReport.ivUsage.iv2Used / filterReport.totalWells));
+            end
+            
+            % Log NaN exclusions  
+            obj.logger.logInfo('--- Missing Data Exclusions (IV1 reference) ---');
+            obj.logger.logInfo(sprintf('Series R NaN: %d wells (%.1f%%)', ...
+                filterReport.nanFailures.seriesR.count, ...
+                100 * filterReport.nanFailures.seriesR.count / filterReport.totalWells));
+            obj.logger.logInfo(sprintf('Seal R NaN: %d wells (%.1f%%)', ...
+                filterReport.nanFailures.sealR.count, ...
+                100 * filterReport.nanFailures.sealR.count / filterReport.totalWells));
+            obj.logger.logInfo(sprintf('Capacitance NaN: %d wells (%.1f%%)', ...
+                filterReport.nanFailures.capacitance.count, ...
+                100 * filterReport.nanFailures.capacitance.count / filterReport.totalWells));
+            
+            % Log threshold exceedances
+            obj.logger.logInfo('--- Threshold Exceedances (IV1 reference) ---');
+            obj.logger.logInfo(sprintf('Series R > %.1f MΩ: %d/%d valid wells (%.1f%%)', ...
+                filterReport.thresholdFailures.seriesR.threshold, ...
+                filterReport.thresholdFailures.seriesR.count, ...
+                filterReport.validDataCounts.seriesR, ...
+                100 * filterReport.thresholdFailures.seriesR.count / max(1, filterReport.validDataCounts.seriesR)));
+            obj.logger.logInfo(sprintf('Seal R > %.1f GΩ: %d/%d valid wells (%.1f%%)', ...
+                filterReport.thresholdFailures.sealR.threshold, ...
+                filterReport.thresholdFailures.sealR.count, ...
+                filterReport.validDataCounts.sealR, ...
+                100 * filterReport.thresholdFailures.sealR.count / max(1, filterReport.validDataCounts.sealR)));
+            obj.logger.logInfo(sprintf('Capacitance > %.1f pF: %d/%d valid wells (%.1f%%)', ...
+                filterReport.thresholdFailures.capacitance.threshold, ...
+                filterReport.thresholdFailures.capacitance.count, ...
+                filterReport.validDataCounts.capacitance, ...
+                100 * filterReport.thresholdFailures.capacitance.count / max(1, filterReport.validDataCounts.capacitance)));
         end
         
         function filteredMeasurements = applyFilterMask(obj, measurements, qualityMask)
