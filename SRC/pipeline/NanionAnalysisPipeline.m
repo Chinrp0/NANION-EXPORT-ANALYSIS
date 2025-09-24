@@ -21,6 +21,9 @@ classdef NanionAnalysisPipeline < handle
                 configPath = [];
             end
             
+            % Smart path resolution for analysis directory
+            obj.ensureAnalysisPathAvailable();
+            
             % Initialize core components
             obj.config = NanionConfig(configPath);
             obj.logger = NanionLogger(obj.config);
@@ -284,6 +287,32 @@ classdef NanionAnalysisPipeline < handle
             %EXTRACTFILENAME Get base filename without extension
             [~, fileName, ~] = fileparts(filePath);
         end
+
+        function ensureAnalysisPathAvailable(obj)
+            %ENSUREANALYSISPATHAVAILABLE Add analysis directory to path
+            
+            % Check if NanionDataExtractor can be found
+            if exist('NanionDataExtractor', 'class')
+                return; % Already available
+            end
+            
+            % Try different possible locations
+            possiblePaths = {'analysis', 'SRC/analysis', '../analysis'};
+            
+            for i = 1:length(possiblePaths)
+                testPath = possiblePaths{i};
+                if exist(fullfile(testPath, 'NanionDataExtractor.m'), 'file')
+                    addpath(testPath);
+                    fprintf('Added to path: %s\n', testPath);
+                    return;
+                end
+            end
+            
+            % If we get here, the analysis directory wasn't found
+            error('NanionAnalysisPipeline:AnalysisPathNotFound', ...
+                'Could not locate analysis directory containing NanionDataExtractor.m');
+        end
+        
     end
     
     methods (Static)
