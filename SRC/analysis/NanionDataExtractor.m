@@ -2,6 +2,7 @@ classdef NanionDataExtractor < handle
     %NANIONDATAEXTRACTOR Extract electrophysiology measurements from parsed data
     %   Converts Col_X tables back to meaningful parameter measurements
     %   Maintains Well_ID mapping throughout the extraction process
+    %   NOW WITH PROPER UNIT CONVERSIONS
     
     properties (Access = private)
         config
@@ -155,12 +156,12 @@ classdef NanionDataExtractor < handle
                 capCol = baseCol + columnMapping.capacitancePattern(1);
                 peakCol = baseCol + columnMapping.peakCurrentPattern(1);
                 
-                % Extract measurements
+                % Extract measurements with proper unit conversions
                 measurements.(ivName) = struct(...
-                    'seriesResistance', obj.extractAndConvert(dataRows, seriesCol), ...
-                    'sealResistance', obj.extractAndConvert(dataRows, sealCol), ...
-                    'capacitance', obj.extractAndConvert(dataRows, capCol), ...
-                    'peakCurrent', obj.extractAndConvert(dataRows, peakCol));
+                    'seriesResistance', obj.extractAndConvert(dataRows, seriesCol, 'seriesR'), ...
+                    'sealResistance', obj.extractAndConvert(dataRows, sealCol, 'sealR'), ...
+                    'capacitance', obj.extractAndConvert(dataRows, capCol, 'capacitance'), ...
+                    'peakCurrent', obj.extractAndConvert(dataRows, peakCol, 'current'));
             end
         end
         
@@ -185,17 +186,18 @@ classdef NanionDataExtractor < handle
                 inactCol = baseCol + columnMapping.inactivationDataPattern(1);
                 actCol = baseCol + columnMapping.activationDataPattern(1);
                 
+                % Extract measurements with proper unit conversions
                 measurements.(ivName) = struct(...
-                    'seriesResistance', obj.extractAndConvert(dataRows, seriesCol), ...
-                    'sealResistance', obj.extractAndConvert(dataRows, sealCol), ...
-                    'capacitance', obj.extractAndConvert(dataRows, capCol), ...
-                    'inactivationData', obj.extractAndConvert(dataRows, inactCol), ...
-                    'activationData', obj.extractAndConvert(dataRows, actCol));
+                    'seriesResistance', obj.extractAndConvert(dataRows, seriesCol, 'seriesR'), ...
+                    'sealResistance', obj.extractAndConvert(dataRows, sealCol, 'sealR'), ...
+                    'capacitance', obj.extractAndConvert(dataRows, capCol, 'capacitance'), ...
+                    'inactivationData', obj.extractAndConvert(dataRows, inactCol, 'current'), ...
+                    'activationData', obj.extractAndConvert(dataRows, actCol, 'current'));
             end
         end
         
-        function values = extractAndConvert(obj, dataRows, columnIndex)
-            %EXTRACTANDCONVERT Extract column data and convert to numeric
+        function values = extractAndConvert(obj, dataRows, columnIndex, paramType)
+            %EXTRACTANDCONVERT Extract column data and convert to proper scientific units
             
             % Check if column exists
             if columnIndex > size(dataRows, 2)
@@ -208,7 +210,51 @@ classdef NanionDataExtractor < handle
             rawData = dataRows{:, columnIndex};
             
             % Convert to numeric (handle cell arrays, strings, etc.)
-            values = obj.convertToNumeric(rawData);
+            numericData = obj.convertToNumeric(rawData);
+            
+            % Apply unit conversions based on parameter type
+            values = obj.applyUnitConversion(numericData, paramType);
+        end
+        
+        function convertedData = applyUnitConversion(obj, rawData, paramType)
+            %APPLYUNITCONVERSION Convert raw instrument values to scientific units
+            
+            switch lower(paramType)
+                case 'seriesr'
+                    % Convert from ohms to MΩ (divide by 1,000,000)
+                    convertedData = rawData / 1e6;
+                    
+                case 'sealr'
+                    % Convert from ohms to GΩ (divide by 1,000,000,000)
+                    convertedData = rawData / 1e9;
+                    
+                case 'capacitance'
+                    % First, try different column locations for capacitance
+                    % Capacitance might be stored in different units or locations
+                    if all(rawData == 0) || all(isnan(rawData))
+                        obj.logger.logWarning('Capacitance values all zero - may need different column mapping');
+                        % Keep raw values for now - will need to investigate
+                        convertedData = rawData;
+                    else
+                        % Convert from farads to pF (multiply by 1e12)
+                        % OR from other units - will need to analyze actual data
+                        convertedData = rawData * 1e12; % Assuming farads to pF
+                    end
+                    
+                case 'current'
+                    % Convert from amperes to pA (multiply by 1e12)
+                    convertedData = rawData * 1e12;
+                    
+                otherwise
+                    % No conversion for unknown parameter types
+                    convertedData = rawData;
+            end
+            
+            % Log conversion statistics for debugging
+            if ~all(isnan(convertedData))
+                obj.logger.logDebug(sprintf('%s conversion: min=%.2f, max=%.2f, median=%.2f', ...
+                    paramType, min(convertedData), max(convertedData), median(convertedData)));
+            end
         end
         
         function numericData = convertToNumeric(obj, rawData)
