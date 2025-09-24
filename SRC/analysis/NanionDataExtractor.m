@@ -118,7 +118,7 @@ classdef NanionDataExtractor < handle
             %EXTRACTBYPROTOCOL Extract measurements using protocol-specific column patterns
             
             dataRows = dataTable(dataStartRow:end, :);
-            numDataRows = size(dataRows, 1);
+            numDataRows = height(dataRows);
             
             switch protocolInfo.type
                 case 'activation'
@@ -200,12 +200,12 @@ classdef NanionDataExtractor < handle
             % Check if column exists
             if columnIndex > size(dataRows, 2)
                 obj.logger.logWarning(sprintf('Column %d not found, using NaN', columnIndex));
-                values = NaN(size(dataRows, 1), 1);
+                values = NaN(height(dataRows), 1);
                 return;
             end
             
             % Extract column data
-            rawData = dataRows(:, columnIndex);
+            rawData = dataRows{:, columnIndex};
             
             % Convert to numeric (handle cell arrays, strings, etc.)
             values = obj.convertToNumeric(rawData);
@@ -222,7 +222,7 @@ classdef NanionDataExtractor < handle
             % Handle cell array conversion
             numericData = NaN(size(rawData));
             
-            for i = 1:length(rawData)
+            for i = 1:height(rawData)
                 if isnumeric(rawData{i})
                     numericData(i) = rawData{i};
                 elseif ischar(rawData{i}) || isstring(rawData{i})

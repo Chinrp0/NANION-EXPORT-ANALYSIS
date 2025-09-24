@@ -1,0 +1,9 @@
+=== NANION ANALYSIS SUMMARY ===
+Date: 24-Sep-2025 15:09:45
+Total files: 1
+Successful: 0
+Failed: 1
+Success rate: 0.0%
+
+--- FILE DETAILS ---
+✗ 18T34958 ACT_IV raw: Undefined function 'LENGTH' for input arguments of type 'table'. Use the height, width, or size functions instead.
