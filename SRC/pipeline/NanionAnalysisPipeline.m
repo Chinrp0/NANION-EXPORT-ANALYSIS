@@ -8,6 +8,7 @@ classdef NanionAnalysisPipeline < handle
         logger
         ioManager
         fileDetector
+        dataExtractor  
         results
     end
     
@@ -25,6 +26,7 @@ classdef NanionAnalysisPipeline < handle
             obj.logger = NanionLogger(obj.config);
             obj.ioManager = NanionIOManager(obj.config, obj.logger);
             obj.fileDetector = NanionFileDetector(obj.logger);
+            obj.dataExtractor = NanionDataExtractor(obj.config, obj.logger);
             obj.results = {};
         end
         
@@ -183,24 +185,44 @@ classdef NanionAnalysisPipeline < handle
         end
         
         function result = processSingleFile(obj, fileInfo, outputDir)
-            %PROCESSSINGLEFILE Core single-file processing logic
-            %   This method will be expanded in later phases
+            %PROCESSSINGLEFILE Core single-file processing logic - Phase 2 Version
             
-            % For Phase 1, just demonstrate the data reading capability
-            obj.logger.logInfo(sprintf('Reading data from: %s', fileInfo.name));
+            obj.logger.logInfo(sprintf('Processing data from: %s', fileInfo.name));
             
-            % Read and parse data
-            rawData = obj.ioManager.readFile(fileInfo.path);
-            parsedData = obj.ioManager.parseData(rawData, fileInfo.protocol);
-            
-            % Create output structure
-            result = struct(...
-                'fileName', fileInfo.name, ...
-                'protocol', fileInfo.protocol, ...
-                'dataShape', size(parsedData.dataTable), ...
-                'numSamples', size(parsedData.dataTable, 1) - parsedData.headerRows, ...
-                'outputDir', fullfile(outputDir, fileInfo.name), ...
-                'processingTime', 0);  % Will be populated in later phases
+            try
+                % Phase 2.1: Read and parse data (existing Phase 1 functionality)
+                obj.logger.logInfo('Step 1: Reading and parsing data...');
+                rawData = obj.ioManager.readFile(fileInfo.path);
+                parsedData = obj.ioManager.parseData(rawData, fileInfo.protocol);
+                
+                % Phase 2.2: Extract measurements with Well_ID mapping
+                obj.logger.logInfo('Step 2: Extracting measurements...');
+                extractedData = obj.dataExtractor.extractMeasurements(parsedData);
+                
+                % Phase 2.3: Apply quality filters
+                obj.logger.logInfo('Step 3: Applying quality filters...');
+                filteredData = obj.dataExtractor.applyQualityFilters(extractedData);
+                
+                % Log filtering results
+                obj.logger.logInfo(sprintf('Quality filtering: %d/%d wells passed (%.1f%%)', ...
+                    filteredData.numWellsPassed, filteredData.numWellsTotal, ...
+                    100 * filteredData.numWellsPassed / filteredData.numWellsTotal));
+                
+                % Create comprehensive result structure
+                result = struct(...
+                    'fileName', fileInfo.name, ...
+                    'protocol', fileInfo.protocol, ...
+                    'extractedData', extractedData, ...
+                    'filteredData', filteredData, ...
+                    'processingSteps', {{'dataReading', 'measurementExtraction', 'qualityFiltering'}}, ...
+                    'outputDir', fullfile(outputDir, fileInfo.name));
+                
+                obj.logger.logInfo(sprintf('✓ Processing complete: %s', fileInfo.name));
+                
+            catch ME
+                obj.logger.logError(sprintf('Processing failed for %s: %s', fileInfo.name, ME.message));
+                rethrow(ME);
+            end
         end
         
         function generateSummaryReport(obj, results, outputDir)
@@ -266,18 +288,19 @@ classdef NanionAnalysisPipeline < handle
     
     methods (Static)
         function result = processSingleFileStatic(fileInfo, outputDir, config)
-            %PROCESSSINGLEFILESTATIC Static version for parallel processing
-            %   Required because parfeval needs static methods
+            %PROCESSSINGLEFILESTATIC Static version for parallel processing - Phase 2
             
             % Create temporary instances for parallel workers
             logger = NanionLogger(config);
             ioManager = NanionIOManager(config, logger);
+            dataExtractor = NanionDataExtractor(config, logger);  % ADD THIS LINE
             
             % Create temporary pipeline instance
             tempPipeline = NanionAnalysisPipeline();
             tempPipeline.config = config;
             tempPipeline.logger = logger;
             tempPipeline.ioManager = ioManager;
+            tempPipeline.dataExtractor = dataExtractor;  % ADD THIS LINE
             
             result = tempPipeline.processSingleFile(fileInfo, outputDir);
         end
