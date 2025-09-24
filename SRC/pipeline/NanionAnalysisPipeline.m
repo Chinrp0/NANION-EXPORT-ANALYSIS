@@ -8,7 +8,7 @@ classdef NanionAnalysisPipeline < handle
         logger
         ioManager
         fileDetector
-        dataExtractor  
+        dataExtractor  % ADDED FOR PHASE 2
         results
     end
     
@@ -21,7 +21,6 @@ classdef NanionAnalysisPipeline < handle
                 configPath = [];
             end
             
-            % Smart path resolution for analysis directory
             obj.ensureAnalysisPathAvailable();
             
             % Initialize core components
@@ -29,7 +28,7 @@ classdef NanionAnalysisPipeline < handle
             obj.logger = NanionLogger(obj.config);
             obj.ioManager = NanionIOManager(obj.config, obj.logger);
             obj.fileDetector = NanionFileDetector(obj.logger);
-            obj.dataExtractor = NanionDataExtractor(obj.config, obj.logger);
+            obj.dataExtractor = NanionDataExtractor(obj.config, obj.logger);  % ADDED FOR PHASE 2
             obj.results = {};
         end
         
@@ -322,14 +321,14 @@ classdef NanionAnalysisPipeline < handle
             % Create temporary instances for parallel workers
             logger = NanionLogger(config);
             ioManager = NanionIOManager(config, logger);
-            dataExtractor = NanionDataExtractor(config, logger);  % ADD THIS LINE
+            dataExtractor = NanionDataExtractor(config, logger);  % ADDED FOR PHASE 2
             
             % Create temporary pipeline instance
             tempPipeline = NanionAnalysisPipeline();
             tempPipeline.config = config;
             tempPipeline.logger = logger;
             tempPipeline.ioManager = ioManager;
-            tempPipeline.dataExtractor = dataExtractor;  % ADD THIS LINE
+            tempPipeline.dataExtractor = dataExtractor;  % ADDED FOR PHASE 2
             
             result = tempPipeline.processSingleFile(fileInfo, outputDir);
         end
