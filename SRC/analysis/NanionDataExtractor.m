@@ -71,6 +71,8 @@ classdef NanionDataExtractor < handle
             hasIV2 = isfield(measurements, 'iv2');
             if hasIV2
                 iv2Data = measurements.iv2;
+            else
+                iv2Data = [];
             end
             
             % Apply filtering with IV2 fallback logic
@@ -309,7 +311,7 @@ classdef NanionDataExtractor < handle
             end
             
             % If IV1 failed and IV2 is available, try IV2
-            if hasIV2
+            if hasIV2 && ~isempty(iv2Data)
                 iv2SeriesR = iv2Data.seriesResistance(wellIdx);
                 iv2SealR = iv2Data.sealResistance(wellIdx);
                 iv2Cap = iv2Data.capacitance(wellIdx);
@@ -332,7 +334,7 @@ classdef NanionDataExtractor < handle
             passed = false;
             if iv1HasData
                 ivUsed = 'iv1_threshold_fail';
-            elseif hasIV2 && ~isnan(iv2Data.seriesResistance(wellIdx))
+            elseif hasIV2 && ~isempty(iv2Data) && ~isnan(iv2Data.seriesResistance(wellIdx))
                 ivUsed = 'iv2_threshold_fail';  
             else
                 ivUsed = 'nan_failure';

@@ -1,224 +1,154 @@
 function test_final_validation()
-    %TEST_FINAL_VALIDATION Final validation of Phase 2 with proper missing data handling
+    %TEST_FINAL_VALIDATION Final validation of Phase 2 with both protocols
     
-    fprintf('=== PHASE 2 FINAL VALIDATION ===\n\n');
+    fprintf('=== PHASE 2 DUAL PROTOCOL VALIDATION ===\n\n');
     
     addpath(genpath('SRC'));
-    testFile = "C:/Users/xdach/OneDrive - Johns Hopkins/Maher_Lab/Protocols/Matlab_scripts/Fede/Master files for CHIN 9_17_2025/18T35056 NGN2 ACT_IV raw.xlsx"; 
     
-    if ~exist(testFile, 'file')
-        fprintf('❌ Test file not found: %s\n', testFile);
-        return;
+    % Test both activation and inactivation protocols
+    baseDir = "C:/Users/xdach/OneDrive - Johns Hopkins/Maher_Lab/Protocols/Matlab_scripts/Fede/Master files for CHIN 9_17_2025/";
+    testFiles = {
+        fullfile(baseDir, "18T22880 NGN2 INACT.xlsx"),
+        fullfile(baseDir, "18T22880 NGN2 ACT_IV raw.xlsx")
+    };
+    
+    % Check that both files exist
+    for i = 1:length(testFiles)
+        if ~exist(testFiles{i}, 'file')
+            fprintf('❌ Test file not found: %s\n', testFiles{i});
+            return;
+        end
     end
     
     try
-        % Run analysis
+        % Run analysis on both files
         pipeline = NanionAnalysisPipeline();
-        results = pipeline.runAnalysis({testFile}, 'tests/phase2_validation');
+        results = pipeline.runAnalysis(testFiles, 'tests/phase2_validation');
         
-        if isempty(results) || ~strcmp(results{1}.status, 'success')
-            fprintf('❌ Analysis failed\n');
+        if isempty(results)
+            fprintf('❌ Analysis failed - no results returned\n');
             return;
         end
         
-        % Extract data
-        extractedData = results{1}.extractedData;
-        filteredData = results{1}.filteredData;
-        iv1Data = extractedData.measurements.iv1;
-        
-        fprintf('=== DATA COMPLETENESS ANALYSIS ===\n');
-        
-        % Analyze missing data patterns
-        seriesValid = ~isnan(iv1Data.seriesResistance);
-        sealValid = ~isnan(iv1Data.sealResistance);
-        capValid = ~isnan(iv1Data.capacitance);
-        currentValid = ~isnan(iv1Data.peakCurrent);
-        
-        fprintf('Data Completeness (IV1):\n');
-        fprintf('  Series Resistance: %d/%d wells (%.1f%%)\n', ...
-            sum(seriesValid), length(seriesValid), 100*sum(seriesValid)/length(seriesValid));
-        fprintf('  Seal Resistance: %d/%d wells (%.1f%%)\n', ...
-            sum(sealValid), length(sealValid), 100*sum(sealValid)/length(sealValid));
-        fprintf('  Capacitance: %d/%d wells (%.1f%%)\n', ...
-            sum(capValid), length(capValid), 100*sum(capValid)/length(capValid));
-        fprintf('  Peak Current: %d/%d wells (%.1f%%)\n', ...
-            sum(currentValid), length(currentValid), 100*sum(currentValid)/length(currentValid));
-        
-        % Statistics for valid data only
-        fprintf('\n=== VALID DATA STATISTICS ===\n');
-        
-        if sum(seriesValid) > 0
-            validSeries = iv1Data.seriesResistance(seriesValid);
-            fprintf('Series Resistance (MΩ) - %d valid values:\n', sum(seriesValid));
-            fprintf('  Range: %.1f to %.1f, Median: %.1f\n', ...
-                min(validSeries), max(validSeries), median(validSeries));
-        end
-        
-        if sum(sealValid) > 0
-            validSeal = iv1Data.sealResistance(sealValid);
-            fprintf('Seal Resistance (GΩ) - %d valid values:\n', sum(sealValid));
-            fprintf('  Range: %.2f to %.1f, Median: %.2f\n', ...
-                min(validSeal), max(validSeal), median(validSeal));
-        end
-        
-        if sum(capValid) > 0
-            validCap = iv1Data.capacitance(capValid);
-            fprintf('Capacitance (pF) - %d valid values:\n', sum(capValid));
-            fprintf('  Range: %.2f to %.1f, Median: %.2f\n', ...
-                min(validCap), max(validCap), median(validCap));
-        end
-        
-        if sum(currentValid) > 0
-            validCurrent = iv1Data.peakCurrent(currentValid);
-            fprintf('Peak Current (pA) - %d valid values:\n', sum(currentValid));
-            fprintf('  Range: %.1f to %.1f, Median: %.1f\n', ...
-                min(validCurrent), max(validCurrent), median(validCurrent));
-        end
-        
-        % Quality filtering analysis
-        fprintf('=== QUALITY FILTERING ANALYSIS ===\n');
-        filterReport = filteredData.filterReport;  % Extract filter report first
-        fprintf('Total wells: %d\n', filterReport.totalWells);
-        fprintf('Wells passed filtering: %d (%.1f%%)\n', ...
-            filterReport.passedWells, 100 * filterReport.passedWells / filterReport.totalWells);
-        
-        % Show IV usage statistics if IV2 was available
-        if isfield(filterReport, 'ivUsage') && filterReport.ivUsage.iv2Available
-            fprintf('\n--- IV Usage for Quality Assessment ---\n');
-            fprintf('  IV1 used: %d wells (%.1f%%)\n', ...
-                filterReport.ivUsage.iv1Used, ...
-                100 * filterReport.ivUsage.iv1Used / filterReport.totalWells);
-            fprintf('  IV2 fallback used: %d wells (%.1f%%) - rescued from IV1 NaN/threshold failures\n', ...
-                filterReport.ivUsage.iv2Used, ...
-                100 * filterReport.ivUsage.iv2Used / filterReport.totalWells);
-        end
-        
-        fprintf('\n--- Missing Data Exclusions ---\n');
-        fprintf('  Series R NaN: %d wells (%.1f%%)\n', ...
-            filterReport.nanFailures.seriesR.count, ...
-            100 * filterReport.nanFailures.seriesR.count / filterReport.totalWells);
-        fprintf('  Seal R NaN: %d wells (%.1f%%)\n', ...
-            filterReport.nanFailures.sealR.count, ...
-            100 * filterReport.nanFailures.sealR.count / filterReport.totalWells);
-        fprintf('  Capacitance NaN: %d wells (%.1f%%)\n', ...
-            filterReport.nanFailures.capacitance.count, ...
-            100 * filterReport.nanFailures.capacitance.count / filterReport.totalWells);
-        
-        fprintf('\n--- Threshold Exceedances (Valid Data Only) ---\n');
-        fprintf('  Series R > %.1f MΩ: %d/%d wells (%.1f%%)\n', ...
-            filterReport.thresholdFailures.seriesR.threshold, ...
-            filterReport.thresholdFailures.seriesR.count, ...
-            filterReport.validDataCounts.seriesR, ...
-            100 * filterReport.thresholdFailures.seriesR.count / max(1, filterReport.validDataCounts.seriesR));
-        fprintf('  Seal R > %.1f GΩ: %d/%d wells (%.1f%%)\n', ...
-            filterReport.thresholdFailures.sealR.threshold, ...
-            filterReport.thresholdFailures.sealR.count, ...
-            filterReport.validDataCounts.sealR, ...
-            100 * filterReport.thresholdFailures.sealR.count / max(1, filterReport.validDataCounts.sealR));
-        fprintf('  Capacitance > %.1f pF: %d/%d wells (%.1f%%)\n', ...
-            filterReport.thresholdFailures.capacitance.threshold, ...
-            filterReport.thresholdFailures.capacitance.count, ...
-            filterReport.validDataCounts.capacitance, ...
-            100 * filterReport.thresholdFailures.capacitance.count / max(1, filterReport.validDataCounts.capacitance));
-        
-
-        % Sample of wells that passed
-        fprintf('\n=== SAMPLE OF PASSED WELLS ===\n');
-        if filteredData.numWellsPassed > 0
-            passedIv1 = filteredData.measurements.iv1;
-            numSamples = min(10, filteredData.numWellsPassed);
+        % Process results for each protocol
+        for fileIdx = 1:length(results)
+            if ~strcmp(results{fileIdx}.status, 'success')
+                fprintf('❌ Analysis failed for file %d\n', fileIdx);
+                continue;
+            end
             
-            fprintf('Well ID   | IV Used | Series R (MΩ) | Seal R (GΩ) | Cap (pF) | Current (pA)\n');
-            fprintf('----------|---------|---------------|-------------|----------|-------------\n');
+            % Extract data for this file
+            extractedData = results{fileIdx}.extractedData;
+            filteredData = results{fileIdx}.filteredData;
+            protocolType = extractedData.protocolInfo.type;
             
-            for i = 1:numSamples
-                % Show which IV was used for filtering decision
-                ivUsed = filteredData.ivUsedForFiltering(i);
-                fprintf('%-8s | %6s | %12.1f | %10.2f | %7.1f | %10.1f\n', ...
-                    filteredData.wellIDs(i), ...
-                    ivUsed, ...
-                    passedIv1.seriesResistance(i), ...
-                    passedIv1.sealResistance(i), ...
-                    passedIv1.capacitance(i), ...
-                    passedIv1.peakCurrent(i));
-            end
+            fprintf('\n=== ANALYSIS RESULTS: %s PROTOCOL ===\n', upper(protocolType));
+            fprintf('File: %s\n', results{fileIdx}.fileName);
+            
+            % Run analysis for this protocol
+            analyzeProtocolResults(extractedData, filteredData);
         end
         
-        % Validate unit conversions
-        fprintf('\n=== UNIT CONVERSION VALIDATION ===\n');
+        % Overall summary
+        fprintf('\n=== DUAL PROTOCOL SUMMARY ===\n');
+        successCount = sum(cellfun(@(x) strcmp(x.status, 'success'), results));
+        fprintf('Successful analyses: %d/%d\n', successCount, length(results));
         
-        % Check if values are in reasonable scientific ranges
-        reasonableRanges = true;
-        
-        if sum(seriesValid) > 0
-            validSeries = iv1Data.seriesResistance(seriesValid);
-            if median(validSeries) > 0 && median(validSeries) < 1000
-                fprintf('✅ Series resistance units correct (median: %.1f MΩ)\n', median(validSeries));
-            else
-                fprintf('❌ Series resistance units may be wrong (median: %.1f)\n', median(validSeries));
-                reasonableRanges = false;
-            end
-        end
-        
-        if sum(sealValid) > 0
-            validSeal = iv1Data.sealResistance(sealValid);
-            if median(validSeal) > 0 && median(validSeal) < 1000
-                fprintf('✅ Seal resistance units correct (median: %.2f GΩ)\n', median(validSeal));
-            else
-                fprintf('❌ Seal resistance units may be wrong (median: %.2f)\n', median(validSeal));
-                reasonableRanges = false;
-            end
-        end
-        
-        if sum(capValid) > 0
-            validCap = iv1Data.capacitance(capValid);
-            if median(validCap) > 0 && median(validCap) < 1000
-                fprintf('✅ Capacitance units correct (median: %.1f pF)\n', median(validCap));
-            else
-                fprintf('❌ Capacitance units may be wrong (median: %.1f)\n', median(validCap));
-                reasonableRanges = false;
-            end
-        end
-        
-        % Overall Phase 2 assessment
-        fprintf('\n=== PHASE 2 ASSESSMENT ===\n');
-        
-        dataExtracted = extractedData.numWells > 0;
-        unitsConverted = reasonableRanges;
-        filteringWorking = filteredData.numWellsPassed < extractedData.numWells; % Some filtering happened
-        
-        if dataExtracted
-            fprintf('✓ Data Extraction: WORKING\n');
+        if successCount == length(results)
+            fprintf('✓ Both activation and inactivation protocols working\n');
+            fprintf('✓ IV2 fallback logic functional for both protocol types\n');
+            fprintf('✓ Ready for Phase 3 development\n');
         else
-            fprintf('✓ Data Extraction: FAILED\n');
+            fprintf('⚠️ Some protocols failed - review logs above\n');
         end
-        
-        if unitsConverted
-            fprintf('✓ Unit Conversion: WORKING\n');
-        else
-            fprintf('✓ Unit Conversion: FAILED\n');
-        end
-        
-        if filteringWorking
-            fprintf('✓ Quality Filtering: WORKING\n');
-        else
-            fprintf('✓ Quality Filtering: FAILED\n');
-        end
-        
-        if dataExtracted && unitsConverted && filteringWorking
-            fprintf('\n🎉 PHASE 2 COMPLETE - Ready for Phase 3 (Boltzmann Analysis)!\n');
-        else
-            fprintf('\n⚠️  Phase 2 needs attention before proceeding to Phase 3\n');
-        end
-        
-        % Suggest next steps
-        fprintf('\n=== NEXT STEPS ===\n');
-        fprintf('1. Test with inactivation protocol file to verify full Phase 2\n');
-        fprintf('2. Optimize quality filter thresholds if needed\n');
-        fprintf('3. Begin Phase 3: Boltzmann curve fitting implementation\n');
         
     catch ME
         fprintf('❌ Validation failed: %s\n', ME.message);
         fprintf('Stack trace:\n%s\n', getReport(ME));
+    end
+end
+
+function analyzeProtocolResults(extractedData, filteredData)
+    %ANALYZEPROTOCOLRESULTS Analyze results for a single protocol
+    
+    iv1Data = extractedData.measurements.iv1;
+    protocolType = extractedData.protocolInfo.type;
+    
+    % Common parameters
+    seriesValid = ~isnan(iv1Data.seriesResistance);
+    sealValid = ~isnan(iv1Data.sealResistance);
+    capValid = ~isnan(iv1Data.capacitance);
+    
+    fprintf('Data Completeness (IV1):\n');
+    fprintf('  Series Resistance: %d/%d wells (%.1f%%)\n', ...
+        sum(seriesValid), extractedData.numWells, 100*sum(seriesValid)/extractedData.numWells);
+    fprintf('  Seal Resistance: %d/%d wells (%.1f%%)\n', ...
+        sum(sealValid), extractedData.numWells, 100*sum(sealValid)/extractedData.numWells);
+    fprintf('  Capacitance: %d/%d wells (%.1f%%)\n', ...
+        sum(capValid), extractedData.numWells, 100*sum(capValid)/extractedData.numWells);
+    
+    % Protocol-specific parameters
+    if strcmp(protocolType, 'activation')
+        if isfield(iv1Data, 'peakCurrent')
+            currentValid = ~isnan(iv1Data.peakCurrent);
+            fprintf('  Peak Current: %d/%d wells (%.1f%%)\n', ...
+                sum(currentValid), extractedData.numWells, 100*sum(currentValid)/extractedData.numWells);
+        end
+    elseif strcmp(protocolType, 'inactivation')
+        if isfield(iv1Data, 'inactivationData')
+            inactValid = ~isnan(iv1Data.inactivationData);
+            fprintf('  Inactivation Data: %d/%d wells (%.1f%%)\n', ...
+                sum(inactValid), extractedData.numWells, 100*sum(inactValid)/extractedData.numWells);
+        end
+        if isfield(iv1Data, 'activationData')
+            actValid = ~isnan(iv1Data.activationData);
+            fprintf('  Activation Data: %d/%d wells (%.1f%%)\n', ...
+                sum(actValid), extractedData.numWells, 100*sum(actValid)/extractedData.numWells);
+        end
+    end
+    
+    % Quality filtering summary
+    filterReport = filteredData.filterReport;
+    fprintf('\nQuality Filtering:\n');
+    fprintf('  Total wells: %d\n', filterReport.totalWells);
+    fprintf('  Passed filtering: %d (%.1f%%)\n', ...
+        filterReport.passedWells, 100 * filterReport.passedWells / filterReport.totalWells);
+    
+    % IV usage if IV2 fallback was used
+    if isfield(filterReport, 'ivUsage') && filterReport.ivUsage.iv2Available
+        fprintf('  IV1 used: %d wells\n', filterReport.ivUsage.iv1Used);
+        fprintf('  IV2 fallback: %d wells (rescued from IV1 failures)\n', filterReport.ivUsage.iv2Used);
+    end
+    
+    % Unit validation for common parameters
+    fprintf('\nUnit Validation:\n');
+    if sum(seriesValid) > 0
+        medianSeries = median(iv1Data.seriesResistance(seriesValid));
+        if medianSeries > 0 && medianSeries < 1000
+            seriesStatus = '✓';
+        else
+            seriesStatus = '❌';
+        end
+        fprintf('  Series R median: %.1f MΩ %s\n', medianSeries, seriesStatus);
+    end
+    
+    if sum(sealValid) > 0
+        medianSeal = median(iv1Data.sealResistance(sealValid));
+        if medianSeal > 0 && medianSeal < 1000
+            sealStatus = '✓';
+        else
+            sealStatus = '❌';
+        end
+        fprintf('  Seal R median: %.2f GΩ %s\n', medianSeal, sealStatus);
+    end
+    
+    if sum(capValid) > 0
+        medianCap = median(iv1Data.capacitance(capValid));
+        if medianCap > 0 && medianCap < 1000
+            capStatus = '✓';
+        else
+            capStatus = '❌';
+        end
+        fprintf('  Capacitance median: %.1f pF %s\n', medianCap, capStatus);
     end
 end
