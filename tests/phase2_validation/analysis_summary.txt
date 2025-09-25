@@ -1,9 +1,9 @@
 === NANION ANALYSIS SUMMARY ===
-Date: 24-Sep-2025 16:14:49
+Date: 24-Sep-2025 16:20:52
 Total files: 1
 Successful: 1
 Failed: 0
 Success rate: 100.0%
 
 --- FILE DETAILS ---
-✓ 18T22880 NGN2 INACT
+✓ 18T35056 NGN2 ACT_IV raw

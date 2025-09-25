@@ -4,7 +4,7 @@ function test_final_validation()
     fprintf('=== PHASE 2 FINAL VALIDATION ===\n\n');
     
     addpath(genpath('SRC'));
-    testFile = "C:/Users/xdach/OneDrive - Johns Hopkins/Maher_Lab/Protocols/Matlab_scripts/Fede/Master files for CHIN 9_17_2025/18T22880 NGN2 INACT.xlsx"; 
+    testFile = "C:/Users/xdach/OneDrive - Johns Hopkins/Maher_Lab/Protocols/Matlab_scripts/Fede/Master files for CHIN 9_17_2025/18T35056 NGN2 ACT_IV raw.xlsx"; 
     
     if ~exist(testFile, 'file')
         fprintf('❌ Test file not found: %s\n', testFile);
