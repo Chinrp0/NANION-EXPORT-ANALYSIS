@@ -187,28 +187,38 @@ classdef NanionAnalysisPipeline < handle
         end
         
         function result = processSingleFile(obj, fileInfo, outputDir)
-            %PROCESSSINGLEFILE Core single-file processing logic - Phase 2 Version
+            %PROCESSSINGLEFILE Core single-file processing logic - Phase 3 Version
             
             obj.logger.logInfo(sprintf('Processing data from: %s', fileInfo.name));
             
             try
-                % Phase 2.1: Read and parse data (existing Phase 1 functionality)
+                % Step 1: Read and parse data
                 obj.logger.logInfo('Step 1: Reading and parsing data...');
                 rawData = obj.ioManager.readFile(fileInfo.path);
                 parsedData = obj.ioManager.parseData(rawData, fileInfo.protocol);
                 
-                % Phase 2.2: Extract measurements with Well_ID mapping
+                % Step 2: Extract measurements with Well_ID mapping
                 obj.logger.logInfo('Step 2: Extracting measurements...');
                 extractedData = obj.dataExtractor.extractMeasurements(parsedData);
                 
-                % Phase 2.3: Apply quality filters
+                % Step 3: Apply quality filters
                 obj.logger.logInfo('Step 3: Applying quality filters...');
                 filteredData = obj.dataExtractor.applyQualityFilters(extractedData);
                 
-                % Log filtering results
                 obj.logger.logInfo(sprintf('Quality filtering: %d/%d wells passed (%.1f%%)', ...
                     filteredData.numWellsPassed, filteredData.numWellsTotal, ...
                     100 * filteredData.numWellsPassed / filteredData.numWellsTotal));
+                
+                % Step 4: Fit Boltzmann curves (NEW FOR PHASE 3)
+                obj.logger.logInfo('Step 4: Fitting Boltzmann curves...');
+                fitter = NanionBoltzmannFitter(obj.config, obj.logger);
+                fittedData = fitter.fitBoltzmann(filteredData);
+                
+                obj.logger.logInfo(sprintf('Boltzmann fitting: %d Good, %d Acceptable, %d Poor, %d Failed', ...
+                    fittedData.summary.fitResults.good, ...
+                    fittedData.summary.fitResults.acceptable, ...
+                    fittedData.summary.fitResults.poor, ...
+                    fittedData.summary.fitResults.failed));
                 
                 % Create comprehensive result structure
                 result = struct(...
@@ -216,7 +226,8 @@ classdef NanionAnalysisPipeline < handle
                     'protocol', fileInfo.protocol, ...
                     'extractedData', extractedData, ...
                     'filteredData', filteredData, ...
-                    'processingSteps', {{'dataReading', 'measurementExtraction', 'qualityFiltering'}}, ...
+                    'fittedData', fittedData, ...   % NEW
+                    'processingSteps', {{'dataReading', 'measurementExtraction', 'qualityFiltering', 'boltzmannFitting'}}, ...
                     'outputDir', fullfile(outputDir, fileInfo.name));
                 
                 obj.logger.logInfo(sprintf('✓ Processing complete: %s', fileInfo.name));
@@ -226,6 +237,7 @@ classdef NanionAnalysisPipeline < handle
                 rethrow(ME);
             end
         end
+
         
         function generateSummaryReport(obj, results, outputDir)
             %GENERATESUMMARYREPORT Create analysis summary
@@ -316,19 +328,19 @@ classdef NanionAnalysisPipeline < handle
     
     methods (Static)
         function result = processSingleFileStatic(fileInfo, outputDir, config)
-            %PROCESSSINGLEFILESTATIC Static version for parallel processing - Phase 2
+            %PROCESSSINGLEFILESTATIC Static version for parallel processing - Phase 3
             
             % Create temporary instances for parallel workers
             logger = NanionLogger(config);
             ioManager = NanionIOManager(config, logger);
-            dataExtractor = NanionDataExtractor(config, logger);  % ADDED FOR PHASE 2
+            dataExtractor = NanionDataExtractor(config, logger);
             
             % Create temporary pipeline instance
             tempPipeline = NanionAnalysisPipeline();
             tempPipeline.config = config;
             tempPipeline.logger = logger;
             tempPipeline.ioManager = ioManager;
-            tempPipeline.dataExtractor = dataExtractor;  % ADDED FOR PHASE 2
+            tempPipeline.dataExtractor = dataExtractor;
             
             result = tempPipeline.processSingleFile(fileInfo, outputDir);
         end
