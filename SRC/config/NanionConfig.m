@@ -160,11 +160,13 @@ classdef NanionConfig < handle
                 'numDataPoints', 23, ...
                 'nernstPotential', 68);  % mV
             
-            % Quality filter thresholds
+            % Quality filter thresholds (median-based filtering)
             obj.configData.filters = struct(...
-                'maxSeriesResistance', 50, ...    % MΩ
-                'maxSealResistance', 50, ...      % GΩ  
-                'maxCapacitance', 250);           % pF
+                'maxSeriesResistance', 50, ...    % MΩ (applied to median of 23 sweeps)
+                'maxSealResistance', 50, ...      % GΩ (applied to median of 23 sweeps)
+                'maxCapacitance', 250, ...        % pF (applied to median of 23 sweeps)
+                'outlierThreshold', 2.0, ...      % Max can be 2× median before failing
+                'minValidSweeps', 15);            % Require 15/23 valid sweeps minimum
             
             % Boltzmann fitting parameters
             obj.configData.boltzmann = struct(...
@@ -290,6 +292,11 @@ classdef NanionConfig < handle
                     'maxSealResistance must be positive');
                 assert(isnumeric(p.filters.maxCapacitance) && p.filters.maxCapacitance > 0, ...
                     'maxCapacitance must be positive');
+
+                assert(isnumeric(p.filters.outlierThreshold) && p.filters.outlierThreshold >= 1.0, ...
+                    'outlierThreshold must be >= 1.0');
+                assert(isnumeric(p.filters.minValidSweeps) && p.filters.minValidSweeps > 0 && p.filters.minValidSweeps <= 23, ...
+                    'minValidSweeps must be between 1 and 23');
                     
                 % Boltzmann parameters
                 assert(isnumeric(p.boltzmann.corrThreshold) && p.boltzmann.corrThreshold > 0 && p.boltzmann.corrThreshold <= 1, ...

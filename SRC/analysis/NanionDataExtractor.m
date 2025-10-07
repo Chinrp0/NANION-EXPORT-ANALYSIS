@@ -1,8 +1,7 @@
 classdef NanionDataExtractor < handle
     %NANIONDATAEXTRACTOR Extract electrophysiology measurements from parsed data
-    %   Converts Col_X tables back to meaningful parameter measurements
-    %   Maintains Well_ID mapping throughout the extraction process
-    %   NOW WITH PROPER UNIT CONVERSIONS AND ENHANCED FILTER REPORTING
+    %   REFACTORED: Extracts ALL sweeps per IV (23 sweeps → [wells × 23] arrays)
+    %   Quality filtering uses MEDIAN-based approach (robust to outliers)
     
     properties (Access = private)
         config
@@ -17,33 +16,33 @@ classdef NanionDataExtractor < handle
         end
         
         function extractedData = extractMeasurements(obj, parsedData)
-            %EXTRACTMEASUREMENTS Extract parameter measurements from parsed table
-            %   Input: parsedData struct from NanionIOManager.parseData()
-            %   Output: extractedData struct with measurements organized by IV and parameter
+            %EXTRACTMEASUREMENTS Extract ALL sweep measurements from parsed table
+            %   NOW EXTRACTS: [numWells × numSweeps] arrays instead of [numWells × 1]
             
             dataTable = parsedData.dataTable;
             protocolInfo = parsedData.protocolInfo;
             dataStartRow = parsedData.headerInfo.dataStartRow;
             
-            obj.logger.logInfo('Extracting measurements from parsed data...');
+            obj.logger.logInfo('Extracting ALL sweeps from parsed data...');
             
             try
-                % Extract Well IDs from first column, starting at data row
+                % Extract Well IDs
                 wellIDs = obj.extractWellIDs(dataTable, dataStartRow);
                 
-                % Extract measurements based on protocol type
+                % Extract measurements (ALL sweeps per IV)
                 measurements = obj.extractByProtocol(dataTable, protocolInfo, dataStartRow);
                 
-                % Package extracted data with Well ID mapping
+                % Package extracted data
                 extractedData = struct(...
                     'wellIDs', wellIDs, ...
                     'measurements', measurements, ...
                     'protocolInfo', protocolInfo, ...
                     'numWells', length(wellIDs), ...
-                    'numIVs', protocolInfo.numIVs);
+                    'numIVs', protocolInfo.numIVs, ...
+                    'numSweeps', protocolInfo.numSweeps);
                 
-                obj.logger.logInfo(sprintf('✓ Extracted measurements: %d wells, %d IVs', ...
-                    extractedData.numWells, extractedData.numIVs));
+                obj.logger.logInfo(sprintf('✓ Extracted: %d wells × %d sweeps × %d IVs', ...
+                    extractedData.numWells, extractedData.numSweeps, extractedData.numIVs));
                 
             catch ME
                 obj.logger.logError(sprintf('Measurement extraction failed: %s', ME.message));
@@ -52,11 +51,11 @@ classdef NanionDataExtractor < handle
         end
         
         function filteredData = applyQualityFilters(obj, extractedData)
-            %APPLYQUALITYFILTERS Apply series R, seal R, and capacitance filters with IV2 fallback
-            %   Input: extractedData from extractMeasurements()
-            %   Output: filteredData with quality filter results and detailed reporting
+            %APPLYQUALITYFILTERS Apply MEDIAN-BASED filters with IV2 fallback
+            %   ROBUST: Uses median across 23 sweeps (resistant to outliers)
+            %   OPTIONAL: Checks if max is not wildly divergent from median
             
-            obj.logger.logInfo('Applying quality filters with IV2 fallback...');
+            obj.logger.logInfo('Applying quality filters (median-based, robust to outliers)...');
             
             measurements = extractedData.measurements;
             filters = obj.config.filters;
@@ -64,7 +63,7 @@ classdef NanionDataExtractor < handle
             
             % Initialize quality assessment arrays
             qualityMask = false(numWells, 1);
-            ivUsedForFiltering = strings(numWells, 1);  % Track which IV was used
+            ivUsedForFiltering = strings(numWells, 1);
             
             % Get IV1 and IV2 data
             iv1Data = measurements.iv1;
@@ -82,7 +81,7 @@ classdef NanionDataExtractor < handle
                 ivUsedForFiltering(wellIdx) = ivUsed;
             end
             
-            % Create enhanced filter report with IV fallback information
+            % Create filter report
             filterReport = obj.createIVFallbackFilterReport(extractedData.wellIDs, measurements, ...
                 qualityMask, ivUsedForFiltering, filters, hasIV2);
             
@@ -94,12 +93,12 @@ classdef NanionDataExtractor < handle
                 'measurements', filteredMeasurements, ...
                 'protocolInfo', extractedData.protocolInfo, ...
                 'qualityMask', qualityMask, ...
-                'ivUsedForFiltering', ivUsedForFiltering(qualityMask), ...  % Track IV source
+                'ivUsedForFiltering', ivUsedForFiltering(qualityMask), ...
                 'filterReport', filterReport, ...
                 'numWellsPassed', sum(qualityMask), ...
                 'numWellsTotal', length(qualityMask));
             
-            % Log detailed filtering results
+            % Log filtering results
             obj.logIVFallbackFilteringResults(filterReport, hasIV2);
         end
     end
@@ -108,26 +107,19 @@ classdef NanionDataExtractor < handle
         function wellIDs = extractWellIDs(obj, dataTable, dataStartRow)
             %EXTRACTWELLIDS Extract Well_ID values from first column
             
-            % Well IDs are in first column, starting at dataStartRow
-            % Skip header rows to get to actual well data
             wellColumn = dataTable{dataStartRow:end, 1};
-            
-            % Convert to string array for consistency
             wellIDs = string(wellColumn);
             
-            % Remove any empty or invalid entries
             validMask = ~ismissing(wellIDs) & wellIDs ~= "";
             wellIDs = wellIDs(validMask);
             
-            obj.logger.logInfo(sprintf('Extracted %d well IDs (first: %s, last: %s)', ...
-                length(wellIDs), wellIDs(1), wellIDs(end)));
+            obj.logger.logInfo(sprintf('Extracted %d well IDs', length(wellIDs)));
         end
         
         function measurements = extractByProtocol(obj, dataTable, protocolInfo, dataStartRow)
-            %EXTRACTBYPROTOCOL Extract measurements using protocol-specific column patterns
+            %EXTRACTBYPROTOCOL Extract ALL sweep measurements by protocol type
             
             dataRows = dataTable(dataStartRow:end, :);
-            numDataRows = height(dataRows);
             
             switch protocolInfo.type
                 case 'activation'
@@ -139,144 +131,156 @@ classdef NanionDataExtractor < handle
                         'Unknown protocol type: %s', protocolInfo.type);
             end
             
-            obj.logger.logInfo(sprintf('Extracted %s protocol measurements for %d wells', ...
-                protocolInfo.type, numDataRows));
+            obj.logger.logInfo(sprintf('Extracted %s measurements', protocolInfo.type));
         end
         
         function measurements = extractActivationMeasurements(obj, dataRows, protocolInfo)
-            %EXTRACTACTIVATIONMEASUREMENTS Extract activation protocol data
-            %   Column pattern: every 6 columns
-            %   Series R: 6, 12, 18...  |  Peak Current: 9, 15, 21...
+            %EXTRACTACTIVATIONMEASUREMENTS Extract ALL activation sweeps
+            %   Column structure: Cols 1-3 = metadata, then every 6 columns per sweep
+            %   First sweep: Cols 4-9 [Compound, Conc, SeriesR(6), SealR(7), Cap(8), Peak(9)]
+            %   Returns [numWells × 23] arrays for all parameters
             
             columnMapping = protocolInfo.columnMapping;
             numIVs = protocolInfo.numIVs;
+            numSweeps = protocolInfo.numSweeps;
             
             measurements = struct();
             
             for iv = 1:numIVs
                 ivName = sprintf('iv%d', iv);
                 
-                % Calculate column indices for this IV
-                baseCol = (iv - 1) * columnMapping.columnPattern;
+                % Calculate base column for this IV
+                % IV1: baseCol = 3, IV2: baseCol = 3 + 23*6 = 141, etc.
+                baseCol = 3 + (iv - 1) * (numSweeps * columnMapping.columnPattern);
                 
-                seriesCol = baseCol + columnMapping.seriesResistancePattern(1);
-                sealCol = baseCol + columnMapping.sealResistancePattern(1);
-                capCol = baseCol + columnMapping.capacitancePattern(1);
-                peakCol = baseCol + columnMapping.peakCurrentPattern(1);
+                % Generate column arrays for all 23 sweeps
+                % Series R at columns [6, 12, 18, ..., 138] for IV1
+                seriesCols = baseCol + 3 + (0:(numSweeps-1)) * columnMapping.columnPattern;
+                sealCols = baseCol + 4 + (0:(numSweeps-1)) * columnMapping.columnPattern;
+                capCols = baseCol + 5 + (0:(numSweeps-1)) * columnMapping.columnPattern;
+                peakCols = baseCol + 6 + (0:(numSweeps-1)) * columnMapping.columnPattern;
                 
-                % Extract measurements with proper unit conversions
+                % Extract ALL sweeps (returns [numWells × 23] arrays)
                 measurements.(ivName) = struct(...
-                    'seriesResistance', obj.extractAndConvert(dataRows, seriesCol, 'seriesR'), ...
-                    'sealResistance', obj.extractAndConvert(dataRows, sealCol, 'sealR'), ...
-                    'capacitance', obj.extractAndConvert(dataRows, capCol, 'capacitance'), ...
-                    'peakCurrent', obj.extractAndConvert(dataRows, peakCol, 'current'));
+                    'seriesResistance', obj.extractMultipleColumns(dataRows, seriesCols, 'seriesR'), ...
+                    'sealResistance', obj.extractMultipleColumns(dataRows, sealCols, 'sealR'), ...
+                    'capacitance', obj.extractMultipleColumns(dataRows, capCols, 'capacitance'), ...
+                    'peakCurrent', obj.extractMultipleColumns(dataRows, peakCols, 'current'));
+                
+                obj.logger.logDebug(sprintf('IV%d: Extracted %d sweeps, columns %d-%d', ...
+                    iv, numSweeps, seriesCols(1), seriesCols(end)));
             end
         end
         
         function measurements = extractInactivationMeasurements(obj, dataRows, protocolInfo)
-            %EXTRACTINACTIVATIONMEASUREMENTS Extract inactivation protocol data
-            %   Column pattern: every 7 columns
-            %   Series R: 6, 13, 20...  |  Inact Data: 9, 16, 23...
+            %EXTRACTINACTIVATIONMEASUREMENTS Extract ALL inactivation sweeps
+            %   Column structure: Every 7 columns per sweep
+            %   First sweep: [Compound, Conc, SeriesR(6), SealR(7), Cap(8), Inact(9), Act(10)]
+            %   Returns [numWells × 23] arrays
             
             columnMapping = protocolInfo.columnMapping;
             numIVs = protocolInfo.numIVs;
+            numSweeps = protocolInfo.numSweeps;
             
             measurements = struct();
             
             for iv = 1:numIVs
                 ivName = sprintf('iv%d', iv);
                 
-                baseCol = (iv - 1) * columnMapping.columnPattern;
+                % Base column for inactivation (7 columns per sweep)
+                baseCol = 3 + (iv - 1) * (numSweeps * columnMapping.columnPattern);
                 
-                seriesCol = baseCol + columnMapping.seriesResistancePattern(1);
-                sealCol = baseCol + columnMapping.sealResistancePattern(1);
-                capCol = baseCol + columnMapping.capacitancePattern(1);
-                inactCol = baseCol + columnMapping.inactivationDataPattern(1);
-                actCol = baseCol + columnMapping.activationDataPattern(1);
+                % Generate column arrays for all sweeps
+                seriesCols = baseCol + 3 + (0:(numSweeps-1)) * columnMapping.columnPattern;
+                sealCols = baseCol + 4 + (0:(numSweeps-1)) * columnMapping.columnPattern;
+                capCols = baseCol + 5 + (0:(numSweeps-1)) * columnMapping.columnPattern;
+                inactCols = baseCol + 6 + (0:(numSweeps-1)) * columnMapping.columnPattern;
+                actCols = baseCol + 7 + (0:(numSweeps-1)) * columnMapping.columnPattern;
                 
-                % Extract measurements with proper unit conversions
+                % Extract ALL sweeps
                 measurements.(ivName) = struct(...
-                    'seriesResistance', obj.extractAndConvert(dataRows, seriesCol, 'seriesR'), ...
-                    'sealResistance', obj.extractAndConvert(dataRows, sealCol, 'sealR'), ...
-                    'capacitance', obj.extractAndConvert(dataRows, capCol, 'capacitance'), ...
-                    'inactivationData', obj.extractAndConvert(dataRows, inactCol, 'current'), ...
-                    'activationData', obj.extractAndConvert(dataRows, actCol, 'current'));
+                    'seriesResistance', obj.extractMultipleColumns(dataRows, seriesCols, 'seriesR'), ...
+                    'sealResistance', obj.extractMultipleColumns(dataRows, sealCols, 'sealR'), ...
+                    'capacitance', obj.extractMultipleColumns(dataRows, capCols, 'capacitance'), ...
+                    'inactivationData', obj.extractMultipleColumns(dataRows, inactCols, 'current'), ...
+                    'activationData', obj.extractMultipleColumns(dataRows, actCols, 'current'));
+                
+                obj.logger.logDebug(sprintf('IV%d: Extracted %d sweeps', iv, numSweeps));
+            end
+        end
+        
+        function dataArray = extractMultipleColumns(obj, dataRows, columnIndices, paramType)
+            %EXTRACTMULTIPLECOLUMNS Extract multiple columns and return [numWells × numColumns] array
+            %   NEW METHOD: Extracts all 23 sweeps per parameter
+            
+            numWells = height(dataRows);
+            numCols = length(columnIndices);
+            
+            dataArray = NaN(numWells, numCols);
+            
+            for colIdx = 1:numCols
+                col = columnIndices(colIdx);
+                if col <= size(dataRows, 2)
+                    rawData = dataRows{:, col};
+                    numericData = obj.convertToNumeric(rawData);
+                    dataArray(:, colIdx) = obj.applyUnitConversion(numericData, paramType);
+                else
+                    obj.logger.logWarning(sprintf('Column %d out of range, using NaN', col));
+                end
             end
         end
         
         function values = extractAndConvert(obj, dataRows, columnIndex, paramType)
-            %EXTRACTANDCONVERT Extract column data and convert to proper scientific units
+            %EXTRACTANDCONVERT Single column extraction (kept for compatibility)
             
-            % Check if column exists
             if columnIndex > size(dataRows, 2)
                 obj.logger.logWarning(sprintf('Column %d not found, using NaN', columnIndex));
                 values = NaN(height(dataRows), 1);
                 return;
             end
             
-            % Extract column data
             rawData = dataRows{:, columnIndex};
-            
-            % Convert to numeric (handle cell arrays, strings, etc.)
             numericData = obj.convertToNumeric(rawData);
-            
-            % Apply unit conversions based on parameter type
             values = obj.applyUnitConversion(numericData, paramType);
         end
         
         function convertedData = applyUnitConversion(obj, rawData, paramType)
-            %APPLYUNITCONVERSION Convert raw instrument values to scientific units
+            %APPLYUNITCONVERSION Convert raw values to scientific units
             
             switch lower(paramType)
                 case 'seriesr'
-                    % Convert from ohms to MΩ (divide by 1,000,000)
-                    convertedData = rawData / 1e6;
+                    convertedData = rawData / 1e6;  % Ω → MΩ
                     
                 case 'sealr'
-                    % Convert from ohms to GΩ (divide by 1,000,000,000)
-                    convertedData = rawData / 1e9;
+                    convertedData = rawData / 1e9;  % Ω → GΩ
                     
                 case 'capacitance'
-                    % First, try different column locations for capacitance
-                    % Capacitance might be stored in different units or locations
-                    if all(rawData == 0) || all(isnan(rawData))
-                        obj.logger.logWarning('Capacitance values all zero - may need different column mapping');
-                        % Keep raw values for now - will need to investigate
+                    if all(rawData == 0 | isnan(rawData), 'all')
+                        obj.logger.logWarning('Capacitance values all zero/NaN');
                         convertedData = rawData;
                     else
-                        % Convert from farads to pF (multiply by 1e12)
-                        % OR from other units - will need to analyze actual data
-                        convertedData = rawData * 1e12; % Assuming farads to pF
+                        convertedData = rawData * 1e12;  % F → pF
                     end
                     
                 case 'current'
-                    % Convert from amperes to pA (multiply by 1e12)
-                    convertedData = rawData * 1e12;
+                    convertedData = rawData * 1e12;  % A → pA
                     
                 otherwise
-                    % No conversion for unknown parameter types
                     convertedData = rawData;
-            end
-            
-            % Log conversion statistics for debugging
-            if ~all(isnan(convertedData))
-                obj.logger.logDebug(sprintf('%s conversion: min=%.2f, max=%.2f, median=%.2f', ...
-                    paramType, min(convertedData), max(convertedData), median(convertedData)));
             end
         end
         
         function numericData = convertToNumeric(obj, rawData)
-            %CONVERTTONUMERIC Convert cell array data to numeric values
+            %CONVERTTONUMERIC Convert cell array to numeric values
             
             if isnumeric(rawData)
                 numericData = rawData;
                 return;
             end
             
-            % Handle cell array conversion
             numericData = NaN(size(rawData));
             
-            for i = 1:height(rawData)
+            for i = 1:numel(rawData)
                 if isnumeric(rawData{i})
                     numericData(i) = rawData{i};
                 elseif ischar(rawData{i}) || isstring(rawData{i})
@@ -289,60 +293,118 @@ classdef NanionDataExtractor < handle
         end
         
         function [passed, ivUsed] = assessWellQuality(obj, iv1Data, iv2Data, wellIdx, filters, hasIV2)
-            %ASSESSWELLQUALITY Assess well quality with IV2 fallback logic
-            %   Returns: [passed, ivUsed] where ivUsed is 'iv1', 'iv2', or 'failed'
+            %ASSESSWELLQUALITY Robust median-based quality check with IV2 fallback
+            %   Uses MEDIAN across 23 sweeps (resistant to outlier spikes)
+            %   Optionally checks if max is wildly divergent from median
             
-            % First try IV1
-            iv1SeriesR = iv1Data.seriesResistance(wellIdx);
-            iv1SealR = iv1Data.sealResistance(wellIdx);
-            iv1Cap = iv1Data.capacitance(wellIdx);
-            
-            % Check if IV1 has all required parameters and passes thresholds
-            iv1HasData = ~isnan(iv1SeriesR) && ~isnan(iv1SealR) && ~isnan(iv1Cap);
-            if iv1HasData
-                iv1PassesThresholds = (iv1SeriesR <= filters.maxSeriesResistance) && ...
-                                     (iv1SealR <= filters.maxSealResistance) && ...
-                                     (iv1Cap <= filters.maxCapacitance);
-                if iv1PassesThresholds
-                    passed = true;
-                    ivUsed = 'iv1';
-                    return;
-                end
+            % Get outlier threshold from config (default: 2.0 = max can be 2x median)
+            if isfield(filters, 'outlierThreshold')
+                outlierThreshold = filters.outlierThreshold;
+            else
+                outlierThreshold = 2.0;  % Default: max > 2 × median is considered outlier
             end
             
-            % If IV1 failed and IV2 is available, try IV2
-            if hasIV2 && ~isempty(iv2Data)
-                iv2SeriesR = iv2Data.seriesResistance(wellIdx);
-                iv2SealR = iv2Data.sealResistance(wellIdx);
-                iv2Cap = iv2Data.capacitance(wellIdx);
+            % Extract ALL sweeps for this well from IV1 (1 × 23 arrays)
+            iv1SeriesR = iv1Data.seriesResistance(wellIdx, :);
+            iv1SealR = iv1Data.sealResistance(wellIdx, :);
+            iv1Cap = iv1Data.capacitance(wellIdx, :);
+            
+            % Check if we have enough valid data (at least 15 of 23 sweeps)
+            iv1SeriesRValid = sum(~isnan(iv1SeriesR));
+            iv1SealRValid = sum(~isnan(iv1SealR));
+            iv1CapValid = sum(~isnan(iv1Cap));
+            
+            minValidSweeps = 15;  % Require at least 15/23 valid sweeps
+            iv1HasData = (iv1SeriesRValid >= minValidSweeps) && ...
+                        (iv1SealRValid >= minValidSweeps) && ...
+                        (iv1CapValid >= minValidSweeps);
+            
+            if iv1HasData
+                % Calculate medians (robust to outliers)
+                iv1SeriesRMedian = median(iv1SeriesR, 'omitnan');
+                iv1SealRMedian = median(iv1SealR, 'omitnan');
+                iv1CapMedian = median(iv1Cap, 'omitnan');
                 
-                % Check if IV2 has all required parameters and passes thresholds
-                iv2HasData = ~isnan(iv2SeriesR) && ~isnan(iv2SealR) && ~isnan(iv2Cap);
-                if iv2HasData
-                    iv2PassesThresholds = (iv2SeriesR <= filters.maxSeriesResistance) && ...
-                                         (iv2SealR <= filters.maxSealResistance) && ...
-                                         (iv2Cap <= filters.maxCapacitance);
-                    if iv2PassesThresholds
+                % Main quality check: median must be below threshold
+                medianPasses = (iv1SeriesRMedian <= filters.maxSeriesResistance) && ...
+                              (iv1SealRMedian <= filters.maxSealResistance) && ...
+                              (iv1CapMedian <= filters.maxCapacitance);
+                
+                if medianPasses
+                    % Optional: Check if max is not wildly divergent
+                    % (This catches systematic problems vs single spike artifacts)
+                    iv1SeriesRMax = max(iv1SeriesR, [], 'omitnan');
+                    iv1SealRMax = max(iv1SealR, [], 'omitnan');
+                    iv1CapMax = max(iv1Cap, [], 'omitnan');
+                    
+                    % Fail if max is absurdly high (e.g., max > median × outlierThreshold)
+                    outlierCheck = (iv1SeriesRMax <= iv1SeriesRMedian * outlierThreshold) && ...
+                                  (iv1SealRMax <= iv1SealRMedian * outlierThreshold) && ...
+                                  (iv1CapMax <= iv1CapMedian * outlierThreshold);
+                    
+                    if outlierCheck
                         passed = true;
-                        ivUsed = 'iv2';
+                        ivUsed = 'iv1';
                         return;
                     end
                 end
             end
             
-            % Both IVs failed or IV2 not available
+            % Try IV2 fallback if available
+            if hasIV2 && ~isempty(iv2Data)
+                iv2SeriesR = iv2Data.seriesResistance(wellIdx, :);
+                iv2SealR = iv2Data.sealResistance(wellIdx, :);
+                iv2Cap = iv2Data.capacitance(wellIdx, :);
+                
+                iv2SeriesRValid = sum(~isnan(iv2SeriesR));
+                iv2SealRValid = sum(~isnan(iv2SealR));
+                iv2CapValid = sum(~isnan(iv2Cap));
+                
+                iv2HasData = (iv2SeriesRValid >= minValidSweeps) && ...
+                            (iv2SealRValid >= minValidSweeps) && ...
+                            (iv2CapValid >= minValidSweeps);
+                
+                if iv2HasData
+                    iv2SeriesRMedian = median(iv2SeriesR, 'omitnan');
+                    iv2SealRMedian = median(iv2SealR, 'omitnan');
+                    iv2CapMedian = median(iv2Cap, 'omitnan');
+                    
+                    medianPasses = (iv2SeriesRMedian <= filters.maxSeriesResistance) && ...
+                                  (iv2SealRMedian <= filters.maxSealResistance) && ...
+                                  (iv2CapMedian <= filters.maxCapacitance);
+                    
+                    if medianPasses
+                        iv2SeriesRMax = max(iv2SeriesR, [], 'omitnan');
+                        iv2SealRMax = max(iv2SealR, [], 'omitnan');
+                        iv2CapMax = max(iv2Cap, [], 'omitnan');
+                        
+                        outlierCheck = (iv2SeriesRMax <= iv2SeriesRMedian * outlierThreshold) && ...
+                                      (iv2SealRMax <= iv2SealRMedian * outlierThreshold) && ...
+                                      (iv2CapMax <= iv2CapMedian * outlierThreshold);
+                        
+                        if outlierCheck
+                            passed = true;
+                            ivUsed = 'iv2';
+                            return;
+                        end
+                    end
+                end
+            end
+            
+            % Both IVs failed
             passed = false;
             if iv1HasData
                 ivUsed = 'iv1_threshold_fail';
-            elseif hasIV2 && ~isempty(iv2Data) && ~isnan(iv2Data.seriesResistance(wellIdx))
-                ivUsed = 'iv2_threshold_fail';  
+            elseif hasIV2 && ~isempty(iv2Data) && sum(~isnan(iv2Data.seriesResistance(wellIdx, :))) >= minValidSweeps
+                ivUsed = 'iv2_threshold_fail';
             else
-                ivUsed = 'nan_failure';
+                ivUsed = 'insufficient_data';
             end
         end
         
-        function filterReport = createIVFallbackFilterReport(obj, wellIDs, measurements, qualityMask, ivUsedForFiltering, filters, hasIV2)
-            %CREATEIVFALLBACKFILTERREPORT Generate filter report with IV fallback information
+        function filterReport = createIVFallbackFilterReport(obj, wellIDs, measurements, ...
+                qualityMask, ivUsedForFiltering, filters, hasIV2)
+            %CREATEIVFALLBACKFILTERREPORT Generate filter report for median-based filtering
             
             numWells = length(wellIDs);
             iv1Data = measurements.iv1;
@@ -355,17 +417,28 @@ classdef NanionDataExtractor < handle
                 iv2Used = 0;
             end
             
-            % Count failure types across both IVs
-            iv1SeriesRNaN = sum(isnan(iv1Data.seriesResistance));
-            iv1SealRNaN = sum(isnan(iv1Data.sealResistance));
-            iv1CapacitanceNaN = sum(isnan(iv1Data.capacitance));
+            % Calculate statistics for reporting (using median-based approach)
+            minValidSweeps = 15;
             
-            % Threshold failures (IV1 only for backward compatibility)
-            iv1SeriesRThresholdFail = sum(~isnan(iv1Data.seriesResistance) & (iv1Data.seriesResistance > filters.maxSeriesResistance));
-            iv1SealRThresholdFail = sum(~isnan(iv1Data.sealResistance) & (iv1Data.sealResistance > filters.maxSealResistance));
-            iv1CapacitanceThresholdFail = sum(~isnan(iv1Data.capacitance) & (iv1Data.capacitance > filters.maxCapacitance));
+            % Count wells with insufficient data
+            iv1SeriesRInsufficient = sum(sum(~isnan(iv1Data.seriesResistance), 2) < minValidSweeps);
+            iv1SealRInsufficient = sum(sum(~isnan(iv1Data.sealResistance), 2) < minValidSweeps);
+            iv1CapInsufficient = sum(sum(~isnan(iv1Data.capacitance), 2) < minValidSweeps);
             
-            % Create comprehensive filter report
+            % Count wells where median exceeds threshold
+            iv1SeriesRMedians = median(iv1Data.seriesResistance, 2, 'omitnan');
+            iv1SealRMedians = median(iv1Data.sealResistance, 2, 'omitnan');
+            iv1CapMedians = median(iv1Data.capacitance, 2, 'omitnan');
+            
+            iv1SeriesRMedianFail = sum(iv1SeriesRMedians > filters.maxSeriesResistance);
+            iv1SealRMedianFail = sum(iv1SealRMedians > filters.maxSealResistance);
+            iv1CapMedianFail = sum(iv1CapMedians > filters.maxCapacitance);
+            
+            % Count wells with valid data
+            iv1SeriesRValid = sum(sum(~isnan(iv1Data.seriesResistance), 2) >= minValidSweeps);
+            iv1SealRValid = sum(sum(~isnan(iv1Data.sealResistance), 2) >= minValidSweeps);
+            iv1CapValid = sum(sum(~isnan(iv1Data.capacitance), 2) >= minValidSweeps);
+            
             filterReport = struct(...
                 'totalWells', numWells, ...
                 'passedWells', sum(qualityMask), ...
@@ -374,70 +447,60 @@ classdef NanionDataExtractor < handle
                     'iv1Used', iv1Used, ...
                     'iv2Used', iv2Used, ...
                     'iv2Available', hasIV2), ...
-                'nanFailures', struct(...
-                    'seriesR', struct('count', iv1SeriesRNaN, 'wellIDs', wellIDs(isnan(iv1Data.seriesResistance))), ...
-                    'sealR', struct('count', iv1SealRNaN, 'wellIDs', wellIDs(isnan(iv1Data.sealResistance))), ...
-                    'capacitance', struct('count', iv1CapacitanceNaN, 'wellIDs', wellIDs(isnan(iv1Data.capacitance)))), ...
-                'thresholdFailures', struct(...
-                    'seriesR', struct('count', iv1SeriesRThresholdFail, 'threshold', filters.maxSeriesResistance), ...
-                    'sealR', struct('count', iv1SealRThresholdFail, 'threshold', filters.maxSealResistance), ...
-                    'capacitance', struct('count', iv1CapacitanceThresholdFail, 'threshold', filters.maxCapacitance)), ...
+                'insufficientData', struct(...
+                    'seriesR', struct('count', iv1SeriesRInsufficient), ...
+                    'sealR', struct('count', iv1SealRInsufficient), ...
+                    'capacitance', struct('count', iv1CapInsufficient)), ...
+                'medianThresholdFailures', struct(...
+                    'seriesR', struct('count', iv1SeriesRMedianFail, 'threshold', filters.maxSeriesResistance), ...
+                    'sealR', struct('count', iv1SealRMedianFail, 'threshold', filters.maxSealResistance), ...
+                    'capacitance', struct('count', iv1CapMedianFail, 'threshold', filters.maxCapacitance)), ...
                 'validDataCounts', struct(...
-                    'seriesR', sum(~isnan(iv1Data.seriesResistance)), ...
-                    'sealR', sum(~isnan(iv1Data.sealResistance)), ...
-                    'capacitance', sum(~isnan(iv1Data.capacitance))));
+                    'seriesR', iv1SeriesRValid, ...
+                    'sealR', iv1SealRValid, ...
+                    'capacitance', iv1CapValid));
         end
         
         function logIVFallbackFilteringResults(obj, filterReport, hasIV2)
-            %LOGIVFALLBACKFILTERINGRESULTS Log detailed filtering results with IV fallback info
+            %LOGIVFALLBACKFILTERINGRESULTS Log filtering results
             
-            obj.logger.logInfo(sprintf('✓ Quality filtering complete: %d/%d wells passed', ...
-                filterReport.passedWells, filterReport.totalWells));
+            obj.logger.logInfo(sprintf('✓ Quality filtering: %d/%d wells passed (%.1f%%)', ...
+                filterReport.passedWells, filterReport.totalWells, ...
+                100 * filterReport.passedWells / filterReport.totalWells));
             
-            % Log IV usage statistics
             if hasIV2
                 obj.logger.logInfo('--- IV Usage for Quality Assessment ---');
                 obj.logger.logInfo(sprintf('IV1 used: %d wells (%.1f%%)', ...
                     filterReport.ivUsage.iv1Used, ...
                     100 * filterReport.ivUsage.iv1Used / filterReport.totalWells));
-                obj.logger.logInfo(sprintf('IV2 fallback used: %d wells (%.1f%%)', ...
+                obj.logger.logInfo(sprintf('IV2 fallback: %d wells (%.1f%%)', ...
                     filterReport.ivUsage.iv2Used, ...
                     100 * filterReport.ivUsage.iv2Used / filterReport.totalWells));
             end
             
-            % Log NaN exclusions  
-            obj.logger.logInfo('--- Missing Data Exclusions (IV1 reference) ---');
-            obj.logger.logInfo(sprintf('Series R NaN: %d wells (%.1f%%)', ...
-                filterReport.nanFailures.seriesR.count, ...
-                100 * filterReport.nanFailures.seriesR.count / filterReport.totalWells));
-            obj.logger.logInfo(sprintf('Seal R NaN: %d wells (%.1f%%)', ...
-                filterReport.nanFailures.sealR.count, ...
-                100 * filterReport.nanFailures.sealR.count / filterReport.totalWells));
-            obj.logger.logInfo(sprintf('Capacitance NaN: %d wells (%.1f%%)', ...
-                filterReport.nanFailures.capacitance.count, ...
-                100 * filterReport.nanFailures.capacitance.count / filterReport.totalWells));
+            obj.logger.logInfo('--- Insufficient Data (<15 valid sweeps) ---');
+            obj.logger.logInfo(sprintf('Series R: %d wells', filterReport.insufficientData.seriesR.count));
+            obj.logger.logInfo(sprintf('Seal R: %d wells', filterReport.insufficientData.sealR.count));
+            obj.logger.logInfo(sprintf('Capacitance: %d wells', filterReport.insufficientData.capacitance.count));
             
-            % Log threshold exceedances
-            obj.logger.logInfo('--- Threshold Exceedances (IV1 reference) ---');
-            obj.logger.logInfo(sprintf('Series R > %.1f MΩ: %d/%d valid wells (%.1f%%)', ...
-                filterReport.thresholdFailures.seriesR.threshold, ...
-                filterReport.thresholdFailures.seriesR.count, ...
-                filterReport.validDataCounts.seriesR, ...
-                100 * filterReport.thresholdFailures.seriesR.count / max(1, filterReport.validDataCounts.seriesR)));
-            obj.logger.logInfo(sprintf('Seal R > %.1f GΩ: %d/%d valid wells (%.1f%%)', ...
-                filterReport.thresholdFailures.sealR.threshold, ...
-                filterReport.thresholdFailures.sealR.count, ...
-                filterReport.validDataCounts.sealR, ...
-                100 * filterReport.thresholdFailures.sealR.count / max(1, filterReport.validDataCounts.sealR)));
-            obj.logger.logInfo(sprintf('Capacitance > %.1f pF: %d/%d valid wells (%.1f%%)', ...
-                filterReport.thresholdFailures.capacitance.threshold, ...
-                filterReport.thresholdFailures.capacitance.count, ...
-                filterReport.validDataCounts.capacitance, ...
-                100 * filterReport.thresholdFailures.capacitance.count / max(1, filterReport.validDataCounts.capacitance)));
+            obj.logger.logInfo('--- Median Threshold Exceedances ---');
+            obj.logger.logInfo(sprintf('Series R median > %.1f MΩ: %d/%d wells', ...
+                filterReport.medianThresholdFailures.seriesR.threshold, ...
+                filterReport.medianThresholdFailures.seriesR.count, ...
+                filterReport.validDataCounts.seriesR));
+            obj.logger.logInfo(sprintf('Seal R median > %.1f GΩ: %d/%d wells', ...
+                filterReport.medianThresholdFailures.sealR.threshold, ...
+                filterReport.medianThresholdFailures.sealR.count, ...
+                filterReport.validDataCounts.sealR));
+            obj.logger.logInfo(sprintf('Capacitance median > %.1f pF: %d/%d wells', ...
+                filterReport.medianThresholdFailures.capacitance.threshold, ...
+                filterReport.medianThresholdFailures.capacitance.count, ...
+                filterReport.validDataCounts.capacitance));
         end
         
         function filteredMeasurements = applyFilterMask(obj, measurements, qualityMask)
-            %APPLYFILTERMASK Apply quality mask to all measurement IVs
+            %APPLYFILTERMASK Apply quality mask to all IVs
+            %   UPDATED: Handles [wells × 23] arrays
             
             filteredMeasurements = struct();
             ivFields = fieldnames(measurements);
@@ -446,11 +509,11 @@ classdef NanionDataExtractor < handle
                 ivName = ivFields{i};
                 ivData = measurements.(ivName);
                 
-                % Apply mask to all parameters in this IV
                 paramFields = fieldnames(ivData);
                 for j = 1:length(paramFields)
                     paramName = paramFields{j};
-                    filteredMeasurements.(ivName).(paramName) = ivData.(paramName)(qualityMask);
+                    % Apply mask to rows (first dimension)
+                    filteredMeasurements.(ivName).(paramName) = ivData.(paramName)(qualityMask, :);
                 end
             end
         end
