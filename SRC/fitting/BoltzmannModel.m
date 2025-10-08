@@ -1,20 +1,15 @@
 classdef BoltzmannModel
     %BOLTZMANNMODEL Static methods for Boltzmann equation fitting
-    %   Provides equation definitions and fit setup for channel kinetics
-    %   UPDATED: Temperature-dependent gating charge calculation
+    %   UPDATED: Fixed overlapping V_min/V_max bounds that caused fitting failures
     
     methods (Static)
         function y = activation(V, V_min, V_max, V_mid, k)
             %ACTIVATION Boltzmann activation equation
-            %   f(V) = V_min + (V_max - V_min) / (1 + exp((V - V_mid) / k))
-            
             y = V_min + (V_max - V_min) ./ (1 + exp((V - V_mid) ./ k));
         end
         
         function y = inactivation(V, V_min, V_max, V_mid, k)
             %INACTIVATION Boltzmann inactivation equation
-            %   f(V) = V_min + (V_max - V_min) / (1 + exp((V_mid - V) / k))
-            
             y = V_min + (V_max - V_min) ./ (1 + exp((V_mid - V) ./ k));
         end
         
@@ -44,7 +39,7 @@ classdef BoltzmannModel
         
         function [startPoints, lowerBounds, upperBounds] = getInitialParams(voltages, currents, protocolType, config)
             %GETINITIALPARAMS Calculate initial guesses and bounds
-            %   Returns: [startPoints, lowerBounds, upperBounds]
+            %   FIXED: Prevents V_min/V_max bound overlap by using data midpoint
             
             % Calculate initial guesses from data
             V_min_init = min(currents);
@@ -54,15 +49,13 @@ classdef BoltzmannModel
             
             startPoints = [V_min_init, V_max_init, V_mid_init, k_init];
             
-            % Set bounds based on protocol type
+            % Get protocol-specific V_mid range
             switch lower(protocolType)
                 case 'activation'
-                    % V_mid range for activation
                     V_mid_lower = config.boltzmann.activationVmidRange(1);
                     V_mid_upper = config.boltzmann.activationVmidRange(2);
                     
                 case 'inactivation'
-                    % V_mid range for inactivation
                     V_mid_lower = config.boltzmann.inactivationVmidRange(1);
                     V_mid_upper = config.boltzmann.inactivationVmidRange(2);
                     
@@ -75,12 +68,27 @@ classdef BoltzmannModel
             k_lower = config.boltzmann.slopeLimits(1);
             k_upper = config.boltzmann.slopeLimits(2);
             
-            % V_min and V_max bounds: allow flexibility around data range
+            % FIXED BOUNDS: Prevent V_min and V_max overlap
+            % Strategy: Allow flexibility but ensure separation
             dataRange = V_max_init - V_min_init;
-            V_min_lower = V_min_init - abs(dataRange);
-            V_min_upper = V_min_init + abs(dataRange);
-            V_max_lower = V_max_init - abs(dataRange);
-            V_max_upper = V_max_init + abs(dataRange);
+            
+            % V_min bounds: Allow baseline to vary, but not approach V_max
+            V_min_lower = V_min_init - 2.0 * abs(dataRange);  % Can go well below minimum
+            V_min_upper = V_min_init + 0.2 * abs(dataRange);  % Can rise slightly above minimum
+            
+            % V_max bounds: Allow saturation to vary, but not approach V_min  
+            V_max_lower = V_max_init - 0.2 * abs(dataRange);  % Can drop slightly below maximum
+            V_max_upper = V_max_init + 2.0 * abs(dataRange);  % Can rise well above maximum
+            
+            % CRITICAL: Ensure no overlap (add safety margin)
+            safetyMargin = 0.05 * abs(dataRange);
+            
+            if V_min_upper + safetyMargin >= V_max_lower
+                % Bounds would overlap - adjust them with guaranteed separation
+                midpoint = (V_min_upper + V_max_lower) / 2;
+                V_min_upper = midpoint - safetyMargin;
+                V_max_lower = midpoint + safetyMargin;
+            end
             
             % Assemble bounds
             lowerBounds = [V_min_lower, V_max_lower, V_mid_lower, k_lower];
@@ -89,36 +97,17 @@ classdef BoltzmannModel
         
         function z_a = calculateGatingCharge(k, temperature)
             %CALCULATEGATINGCHARGE Calculate apparent gating charge
-            %   z_a = RT/F / k
-            %   
-            %   Inputs:
-            %       k - Slope factor(s) in mV (scalar or array)
-            %       temperature - Temperature in °C (optional, default = 25°C)
-            %   
-            %   Output:
-            %       z_a - Apparent gating charge (elementary charges)
-            %   
-            %   Physics:
-            %       At T=20°C: RT/F = 24.9 mV, so z_a ≈ 24.9/k
-            %       At T=25°C: RT/F = 25.7 mV, so z_a ≈ 25.7/k
-            %   
-            %   Reference: Matches Origin Lab manual fitting equation
-            %       f(V) = V_min + (V_max-V_min)/(1 + e^((z_a*F/RT)*(V-V_mid)))
+            %   z_a = RT/F / k (elementary charges)
             
             if nargin < 2
                 temperature = 25;  % Default to 25°C
             end
             
             % Calculate RT/F in millivolts
-            % R = 8.314 J/(mol·K) - gas constant
-            % F = 96485 C/mol - Faraday constant
-            % T in Kelvin = T_celsius + 273.15
-            % RT/F in mV = (T_K * R / F) * 1000
-            
             T_kelvin = temperature + 273.15;
             RT_over_F = (T_kelvin * 8.314 / 96485) * 1000;  % mV
             
-            % Calculate gating charge: z_a = RT/F / k
+            % Calculate gating charge
             z_a = RT_over_F ./ k;
         end
     end
