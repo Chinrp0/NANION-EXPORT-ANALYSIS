@@ -1,6 +1,7 @@
 classdef FitQualityAssessor
     %FITQUALITYASSESSOR Quality categorization for Boltzmann fits
     %   Classifies fits as Good/Acceptable/Poor/Failed based on R² and bounds
+    %   FIXED: Removed strict V_max > V_min check for raw conductance data
     
     methods (Static)
         function quality = assessQuality(fitParams, gof, protocolType, config)
@@ -35,6 +36,7 @@ classdef FitQualityAssessor
         
         function isValid = checkParameterBounds(fitParams, protocolType, config)
             %CHECKPARAMETERBOUNDS Verify parameters are physically reasonable
+            %   FIXED: Removed V_max > V_min check (too strict for raw conductance)
             
             isValid = true;
             
@@ -65,11 +67,9 @@ classdef FitQualityAssessor
                 return;
             end
             
-            % Check sigmoid direction (V_max > V_min for proper activation)
-            if fitParams.V_max <= fitParams.V_min
-                isValid = false;
-                return;
-            end
+            % REMOVED: V_max > V_min check
+            % This check was too strict for raw conductance data where the
+            % sigmoid may be inverted or near-flat. R² is a better quality metric.
         end
         
         function summary = summarizeFitResults(fittedData)

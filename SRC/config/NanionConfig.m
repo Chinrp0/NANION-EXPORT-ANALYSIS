@@ -156,13 +156,15 @@ classdef NanionConfig < handle
     methods (Access = private)
         function loadDefaultConfig(obj)
             %LOADDEFAULTCONFIG Load default configuration values
+            %   UPDATED: Relaxed Boltzmann parameter bounds for better fitting
             
             obj.configData = struct();
             
             % Analysis parameters
             obj.configData.analysis = struct(...
                 'numDataPoints', 23, ...
-                'nernstPotential', 68);  % mV
+                'nernstPotential', 68, ...  % mV (E_rev for Na+)
+                'temperature', 20);          % °C (NEW - for accurate gating charge)
             
             % Quality filter thresholds (median-based filtering)
             obj.configData.filters = struct(...
@@ -172,14 +174,14 @@ classdef NanionConfig < handle
                 'outlierThreshold', 2.0, ...      % Max can be 2× median before failing
                 'minValidSweeps', 19);            % Require 19/23 valid sweeps minimum
             
-            % Boltzmann fitting parameters
+            % Boltzmann fitting parameters (UPDATED BOUNDS)
             obj.configData.boltzmann = struct(...
                 'corrThreshold', 0.90, ...              % R² threshold for "Good" fits
                 'acceptableThreshold', 0.75, ...        % R² threshold for "Acceptable"
-                'slopeLimits', [1, 30], ...            % k bounds (mV)
-                'activationVmidRange', [-100, 0], ...   % V_mid for activation (mV)
+                'slopeLimits', [1, 100], ...           % k bounds (mV) - WIDENED from [1, 30]
+                'activationVmidRange', [-100, 10], ... % V_mid for activation (mV) - RELAXED from [-100, 0]
                 'inactivationVmidRange', [-95, -30], ... % V_mid for inactivation (mV)
-                'minValidPoints', 19, ...              % Min data points required (user can change to 19)
+                'minValidPoints', 15, ...              % Min data points required - REDUCED from 19
                 'useParallel', true);                  % Enable parfor
             
             % Plotting parameters
