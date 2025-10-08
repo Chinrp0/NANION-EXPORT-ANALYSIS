@@ -300,29 +300,99 @@ classdef NanionAnalysisPipeline < handle
         end
 
         function ensureAnalysisPathAvailable(obj)
-            %ENSUREANALYSISPATHAVAILABLE Add analysis directory to path
+            %ENSUREANALYSISPATHAVAILABLE Ensure all required directories are in path
+            %   UPDATED: Comprehensive check for all module directories
             
-            % Check if NanionDataExtractor can be found
-            if exist('NanionDataExtractor', 'class')
-                return; % Already available
-            end
+            % Define all required classes and their expected directories
+            requiredComponents = struct(...
+                'NanionConfig', 'config', ...
+                'NanionLogger', 'utils', ...
+                'NanionDataExtractor', 'analysis', ...
+                'NanionBoltzmannFitter', 'fitting', ...
+                'BoltzmannModel', 'fitting', ...
+                'FitQualityAssessor', 'fitting', ...
+                'NanionBoltzmannPlotter', 'plotting');
             
-            % Try different possible locations
-            possiblePaths = {'analysis', 'SRC/analysis', '../analysis'};
+            componentNames = fieldnames(requiredComponents);
+            missingComponents = {};
             
-            for i = 1:length(possiblePaths)
-                testPath = possiblePaths{i};
-                if exist(fullfile(testPath, 'NanionDataExtractor.m'), 'file')
-                    addpath(testPath);
-                    fprintf('Added to path: %s\n', testPath);
-                    return;
+            % Check which components are missing
+            for i = 1:length(componentNames)
+                className = componentNames{i};
+                if ~exist(className, 'class')
+                    missingComponents{end+1} = className;
                 end
             end
             
-            % If we get here, the analysis directory wasn't found
-            error('NanionAnalysisPipeline:AnalysisPathNotFound', ...
-                'Could not locate analysis directory containing NanionDataExtractor.m');
+            % If everything is available, return early
+            if isempty(missingComponents)
+                return;
+            end
+            
+            % Try to locate and add missing directories
+            fprintf('Some required classes not found. Attempting to add paths...\n');
+            
+            % Get current file location
+            currentFile = mfilename('fullpath');
+            currentDir = fileparts(currentFile);
+            
+            % Try to find repository root
+            possibleRoots = {
+                currentDir,                    % Current directory (pipeline/)
+                fileparts(currentDir),         % Parent directory (SRC/)
+                fullfile(fileparts(currentDir), 'SRC'),  % ../SRC/
+                pwd                            % Current working directory
+            };
+            
+            repoRoot = '';
+            for i = 1:length(possibleRoots)
+                testRoot = possibleRoots{i};
+                % Check if this looks like the SRC directory
+                if exist(fullfile(testRoot, 'config'), 'dir') && ...
+                   exist(fullfile(testRoot, 'analysis'), 'dir') && ...
+                   exist(fullfile(testRoot, 'fitting'), 'dir')
+                    repoRoot = testRoot;
+                    break;
+                end
+            end
+            
+            if isempty(repoRoot)
+                error('NanionAnalysisPipeline:PathNotFound', ...
+                    ['Cannot locate repository root. Missing classes: ' strjoin(missingComponents, ', ') ...
+                    '. Please run setup_nanion_paths() manually or ensure you are in the correct directory.']);
+            end
+            
+            fprintf('Found repository root: %s\n', repoRoot);
+            
+            % Add all required directories
+            requiredDirs = {'config', 'utils', 'io', 'analysis', 'fitting', 'plotting', 'pipeline', 'detection'};
+            
+            for i = 1:length(requiredDirs)
+                dirPath = fullfile(repoRoot, requiredDirs{i});
+                if exist(dirPath, 'dir') && ~contains(path, dirPath)
+                    addpath(dirPath);
+                    fprintf('Added to path: %s\n', dirPath);
+                end
+            end
+            
+            % Verify all components are now available
+            stillMissing = {};
+            for i = 1:length(componentNames)
+                className = componentNames{i};
+                if ~exist(className, 'class')
+                    stillMissing{end+1} = className;
+                end
+            end
+            
+            if ~isempty(stillMissing)
+                error('NanionAnalysisPipeline:PathSetupFailed', ...
+                    ['Failed to locate required classes: ' strjoin(stillMissing, ', ') ...
+                    '. Please check your repository structure or run setup_nanion_paths() manually.']);
+            end
+            
+            fprintf('✓ All required paths added successfully\n\n');
         end
+
         
     end
     
