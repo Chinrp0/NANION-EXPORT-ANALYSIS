@@ -17,7 +17,7 @@ classdef NanionBoltzmannFitter < handle
         
         function fittedData = fitBoltzmann(obj, filteredData)
             %FITBOLTZMANN Main entry point: fits all wells in filteredData
-            %   Returns fittedData structure with wells array and summary
+            %   Uses CONDUCTANCE for activation, CURRENT for inactivation
             
             obj.logger.logInfo('Starting Boltzmann curve fitting...');
             
@@ -28,38 +28,54 @@ classdef NanionBoltzmannFitter < handle
             % Determine which IV to use for each well
             ivUsed = filteredData.ivUsedForFiltering;
             
-            % Get current data based on protocol
+            % Get data based on protocol type
             if strcmp(protocolType, 'activation')
-                iv1Currents = filteredData.measurements.iv1.peakCurrent;
-                if isfield(filteredData.measurements, 'iv2')
-                    iv2Currents = filteredData.measurements.iv2.peakCurrent;
-                else
-                    iv2Currents = [];
+                % Use CONDUCTANCE for activation
+                if ~isfield(filteredData.measurements.iv1, 'conductance')
+                    error('NanionBoltzmannFitter:MissingConductance', ...
+                        'Conductance not calculated. Run calculateConductance() first.');
                 end
+                
+                iv1Data = filteredData.measurements.iv1.conductance;  % nS
+                if isfield(filteredData.measurements, 'iv2')
+                    iv2Data = filteredData.measurements.iv2.conductance;
+                else
+                    iv2Data = [];
+                end
+                
+                dataType = 'conductance';
+                dataUnits = 'nS';
+                obj.logger.logInfo('Using conductance (nS) for activation protocol');
+                
             else % inactivation
-                iv1Currents = filteredData.measurements.iv1.inactivationData;
+                % Use CURRENT for inactivation
+                iv1Data = filteredData.measurements.iv1.inactivationData;  % pA
                 if isfield(filteredData.measurements, 'iv2')
-                    iv2Currents = filteredData.measurements.iv2.inactivationData;
+                    iv2Data = filteredData.measurements.iv2.inactivationData;
                 else
-                    iv2Currents = [];
+                    iv2Data = [];
                 end
+                
+                dataType = 'current';
+                dataUnits = 'pA';
+                obj.logger.logInfo('Using current (pA) for inactivation protocol');
             end
             
             % Initialize wells array
             wells(numWells) = struct(...
                 'wellID', '', 'protocol', '', 'ivUsed', '', ...
-                'voltages', [], 'currents', [], 'validPoints', 0, ...
-                'fitParams', struct(), 'fitQuality', '');
+                'voltages', [], 'data', [], 'dataType', dataType, 'dataUnits', dataUnits, ...
+                'validPoints', 0, 'fitParams', struct(), 'fitQuality', '');
             
             % Fit wells (parallel or sequential)
             if obj.config.boltzmann.useParallel && numWells > 1
                 obj.logger.logInfo('Using parallel processing for fitting...');
                 wells = obj.fitWellsParallel(wells, filteredData.wellIDs, voltages, ...
-                    iv1Currents, iv2Currents, ivUsed, protocolType);
+                    iv1Data, iv2Data, ivUsed, protocolType, dataType, dataUnits);
             else
                 obj.logger.logInfo('Using sequential processing for fitting...');
                 wells = obj.fitWellsSequential(wells, filteredData.wellIDs, voltages, ...
-                    iv1Currents, iv2Currents, ivUsed, protocolType);
+                    iv1Data, iv2Data, ivUsed, protocolType, dataType, dataUnits);
             end
             
             % Generate summary statistics
@@ -70,26 +86,30 @@ classdef NanionBoltzmannFitter < handle
                 'wells', wells, ...
                 'summary', summary, ...
                 'numWells', numWells, ...
-                'protocol', protocolType);
+                'protocol', protocolType, ...
+                'dataType', dataType, ...
+                'dataUnits', dataUnits);
             
             obj.logger.logInfo(sprintf('✓ Boltzmann fitting complete: %d Good, %d Acceptable, %d Poor, %d Failed', ...
                 summary.fitResults.good, summary.fitResults.acceptable, ...
                 summary.fitResults.poor, summary.fitResults.failed));
         end
+
         
-        function wellFit = fitSingleWell(obj, voltages, currents, protocolType, ivUsed)
+        function wellFit = fitSingleWell(obj, voltages, data, protocolType, ivUsed)
             %FITSINGLEWELL Fit one well, returns struct with fitParams, gof, quality
+            %   'data' can be conductance (for activation) or current (for inactivation)
             
             % Remove NaN values
-            validIdx = ~isnan(currents) & ~isnan(voltages);
+            validIdx = ~isnan(data) & ~isnan(voltages);
             V_valid = voltages(validIdx);
-            I_valid = currents(validIdx);
+            D_valid = data(validIdx);  % Generic data (G or I)
             numValid = sum(validIdx);
             
             % Initialize result structure
             wellFit = struct(...
                 'voltages', voltages, ...
-                'currents', currents, ...
+                'data', data, ...
                 'validPoints', numValid, ...
                 'fitParams', struct('converged', false), ...
                 'fitQuality', 'Failed', ...
@@ -103,13 +123,13 @@ classdef NanionBoltzmannFitter < handle
             try
                 % Get initial parameters and bounds
                 [startPoints, lowerBounds, upperBounds] = BoltzmannModel.getInitialParams(...
-                    V_valid, I_valid, protocolType, obj.config);
+                    V_valid, D_valid, protocolType, obj.config);
                 
                 % Create fittype
                 ft = BoltzmannModel.createFitType(protocolType);
                 
                 % Perform fit
-                [fitresult, gof] = fit(V_valid(:), I_valid(:), ft, ...
+                [fitresult, gof] = fit(V_valid(:), D_valid(:), ft, ...
                     'StartPoint', startPoints, ...
                     'Lower', lowerBounds, ...
                     'Upper', upperBounds);
@@ -142,28 +162,30 @@ classdef NanionBoltzmannFitter < handle
     
     methods (Access = private)
         function wells = fitWellsSequential(obj, wells, wellIDs, voltages, ...
-                iv1Currents, iv2Currents, ivUsed, protocolType)
+                iv1Data, iv2Data, ivUsed, protocolType, dataType, dataUnits)
             %FITWELLSSEQUENTIAL Fit wells one by one
             
             numWells = length(wellIDs);
             
             for wellIdx = 1:numWells
-                % Get current data for this well
+                % Get data for this well
                 if strcmp(ivUsed(wellIdx), 'iv1')
-                    currents = iv1Currents(wellIdx, :);
+                    data = iv1Data(wellIdx, :);
                 else
-                    currents = iv2Currents(wellIdx, :);
+                    data = iv2Data(wellIdx, :);
                 end
                 
                 % Fit well
-                wellFit = obj.fitSingleWell(voltages, currents, protocolType, ivUsed(wellIdx));
+                wellFit = obj.fitSingleWell(voltages, data, protocolType, ivUsed(wellIdx));
                 
                 % Store result
                 wells(wellIdx).wellID = wellIDs(wellIdx);
                 wells(wellIdx).protocol = protocolType;
                 wells(wellIdx).ivUsed = wellFit.ivUsed;
                 wells(wellIdx).voltages = wellFit.voltages;
-                wells(wellIdx).currents = wellFit.currents;
+                wells(wellIdx).data = wellFit.data;
+                wells(wellIdx).dataType = dataType;
+                wells(wellIdx).dataUnits = dataUnits;
                 wells(wellIdx).validPoints = wellFit.validPoints;
                 wells(wellIdx).fitParams = wellFit.fitParams;
                 wells(wellIdx).fitQuality = wellFit.fitQuality;
@@ -174,36 +196,39 @@ classdef NanionBoltzmannFitter < handle
                 end
             end
         end
+
         
         function wells = fitWellsParallel(obj, wells, wellIDs, voltages, ...
-                iv1Currents, iv2Currents, ivUsed, protocolType)
+                iv1Data, iv2Data, ivUsed, protocolType, dataType, dataUnits)
             %FITWELLSPARALLEL Fit wells in parallel using parfor
             
             numWells = length(wellIDs);
             config = obj.config; % Copy for parfor
             
             parfor wellIdx = 1:numWells
-                % Get current data for this well
+                % Get data for this well
                 if strcmp(ivUsed(wellIdx), 'iv1')
-                    currents = iv1Currents(wellIdx, :);
+                    data = iv1Data(wellIdx, :);
                 else
-                    if ~isempty(iv2Currents)
-                        currents = iv2Currents(wellIdx, :);
+                    if ~isempty(iv2Data)
+                        data = iv2Data(wellIdx, :);
                     else
-                        currents = iv1Currents(wellIdx, :);
+                        data = iv1Data(wellIdx, :);
                     end
                 end
                 
                 % Fit well (static method for parfor)
                 wellFit = NanionBoltzmannFitter.fitSingleWellStatic(...
-                    voltages, currents, protocolType, ivUsed(wellIdx), config);
+                    voltages, data, protocolType, ivUsed(wellIdx), config);
                 
                 % Store result
                 wells(wellIdx).wellID = wellIDs(wellIdx);
                 wells(wellIdx).protocol = protocolType;
                 wells(wellIdx).ivUsed = wellFit.ivUsed;
                 wells(wellIdx).voltages = wellFit.voltages;
-                wells(wellIdx).currents = wellFit.currents;
+                wells(wellIdx).data = wellFit.data;
+                wells(wellIdx).dataType = dataType;
+                wells(wellIdx).dataUnits = dataUnits;
                 wells(wellIdx).validPoints = wellFit.validPoints;
                 wells(wellIdx).fitParams = wellFit.fitParams;
                 wells(wellIdx).fitQuality = wellFit.fitQuality;
@@ -214,19 +239,19 @@ classdef NanionBoltzmannFitter < handle
     end
     
     methods (Static)
-        function wellFit = fitSingleWellStatic(voltages, currents, protocolType, ivUsed, config)
+        function wellFit = fitSingleWellStatic(voltages, data, protocolType, ivUsed, config)
             %FITSINGLEWELLSTATIC Static version for parfor compatibility
             
             % Remove NaN values
-            validIdx = ~isnan(currents) & ~isnan(voltages);
+            validIdx = ~isnan(data) & ~isnan(voltages);
             V_valid = voltages(validIdx);
-            I_valid = currents(validIdx);
+            D_valid = data(validIdx);
             numValid = sum(validIdx);
             
             % Initialize result
             wellFit = struct(...
                 'voltages', voltages, ...
-                'currents', currents, ...
+                'data', data, ...
                 'validPoints', numValid, ...
                 'fitParams', struct('converged', false), ...
                 'fitQuality', 'Failed', ...
@@ -240,13 +265,13 @@ classdef NanionBoltzmannFitter < handle
             try
                 % Get initial parameters and bounds
                 [startPoints, lowerBounds, upperBounds] = BoltzmannModel.getInitialParams(...
-                    V_valid, I_valid, protocolType, config);
+                    V_valid, D_valid, protocolType, config);
                 
                 % Create fittype
                 ft = BoltzmannModel.createFitType(protocolType);
                 
                 % Perform fit
-                [fitresult, gof] = fit(V_valid(:), I_valid(:), ft, ...
+                [fitresult, gof] = fit(V_valid(:), D_valid(:), ft, ...
                     'StartPoint', startPoints, ...
                     'Lower', lowerBounds, ...
                     'Upper', upperBounds);

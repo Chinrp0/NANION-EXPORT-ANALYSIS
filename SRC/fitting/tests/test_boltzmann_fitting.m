@@ -1,6 +1,7 @@
-function test_boltzmann_fitting()
+function results = test_boltzmann_fitting()
     %TEST_BOLTZMANN_FITTING Validation script for Phase 3 Boltzmann fitting
     %   Tests fitting on sample activation/inactivation files
+    %   Returns results and saves to base workspace for plotting
     
     fprintf('=== BOLTZMANN FITTING TEST ===\n\n');
     
@@ -14,6 +15,7 @@ function test_boltzmann_fitting()
     
     if isequal(filename, 0)
         fprintf('No file selected. Test cancelled.\n');
+        results = [];
         return;
     end
     
@@ -28,12 +30,16 @@ function test_boltzmann_fitting()
     fprintf('Testing: %s\n\n', filename);
     
     try
+        % Initialize results variable
+        results = [];
+        
         % Run analysis with Boltzmann fitting
         fprintf('Running complete pipeline with Boltzmann fitting...\n');
         results = pipeline.runAnalysis({filePath}, outputDir);
         
         if isempty(results) || strcmp(results{1}.status, 'failed')
             fprintf('✗ Pipeline failed\n');
+            results = [];
             return;
         end
         
@@ -186,9 +192,15 @@ function test_boltzmann_fitting()
         fprintf('\n✓ ALL BOLTZMANN FITTING TESTS PASSED!\n');
         fprintf('Output saved to: %s\n', outputDir);
         
+        % Save results to base workspace for plotting
+        assignin('base', 'results', results);
+        fprintf('\n✓ Results saved to workspace variable "results"\n');
+        fprintf('   You can now run: plot_test_results()\n');
+        
     catch ME
         fprintf('\n✗ TEST FAILED: %s\n', ME.message);
         fprintf('Stack trace:\n%s\n', getReport(ME));
+        results = [];
     end
     
     fprintf('\n=== TEST COMPLETE ===\n');

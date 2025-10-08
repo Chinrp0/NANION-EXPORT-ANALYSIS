@@ -18,6 +18,7 @@ classdef NanionDataExtractor < handle
         function extractedData = extractMeasurements(obj, parsedData)
             %EXTRACTMEASUREMENTS Extract ALL sweep measurements from parsed table
             %   NOW EXTRACTS: [numWells × numSweeps] arrays instead of [numWells × 1]
+            %   CALCULATES: Conductance for activation protocols
             
             dataTable = parsedData.dataTable;
             protocolInfo = parsedData.protocolInfo;
@@ -44,11 +45,66 @@ classdef NanionDataExtractor < handle
                 obj.logger.logInfo(sprintf('✓ Extracted: %d wells × %d sweeps × %d IVs', ...
                     extractedData.numWells, extractedData.numSweeps, extractedData.numIVs));
                 
+                % Calculate conductance for activation protocols
+                if strcmp(protocolInfo.type, 'activation')
+                    extractedData = obj.calculateConductance(extractedData);
+                end
+                
             catch ME
                 obj.logger.logError(sprintf('Measurement extraction failed: %s', ME.message));
                 rethrow(ME);
             end
         end
+
+                function extractedData = calculateConductance(obj, extractedData)
+            %CALCULATECONDUCTANCE Calculate conductance for activation protocols
+            %   G = I / (V - V_rev) in nanoSiemens (nS)
+            %   Only applies to activation protocols
+            
+            if ~strcmp(extractedData.protocolInfo.type, 'activation')
+                % Not activation - no conductance needed
+                return;
+            end
+            
+            obj.logger.logInfo('Calculating conductance (G = I / (V - E_rev))...');
+            
+            voltages = extractedData.protocolInfo.voltages;  % [1 × 23] mV
+            V_rev = obj.config.nernstPotential;  % mV (typically 68 mV for Na+)
+            
+            % Calculate driving force for each voltage step
+            drivingForce = voltages - V_rev;  % [1 × 23] mV
+            
+            % Process each IV
+            measurements = extractedData.measurements;
+            ivFields = fieldnames(measurements);
+            
+            for i = 1:length(ivFields)
+                ivName = ivFields{i};
+                
+                % Get peak current [numWells × 23] in pA
+                peakCurrent = measurements.(ivName).peakCurrent;
+                
+                % Calculate conductance: G = I / (V - V_rev)
+                % Units: pA / mV = nS (nanoSiemens)
+                conductance = peakCurrent ./ drivingForce;  % [numWells × 23]
+                
+                % Handle division by zero (if any voltage equals V_rev)
+                conductance(isinf(conductance)) = NaN;
+                
+                % Store conductance alongside current
+                measurements.(ivName).conductance = conductance;  % nS
+                
+                obj.logger.logDebug(sprintf('%s: Calculated conductance (G = I/(V-%.1f))', ...
+                    ivName, V_rev));
+            end
+            
+            % Update extracted data
+            extractedData.measurements = measurements;
+            
+            obj.logger.logInfo(sprintf('✓ Conductance calculated for %d wells', ...
+                extractedData.numWells));
+        end
+
         
         function filteredData = applyQualityFilters(obj, extractedData)
             %APPLYQUALITYFILTERS Apply MEDIAN-BASED filters with IV2 fallback
