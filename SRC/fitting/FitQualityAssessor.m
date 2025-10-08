@@ -1,7 +1,6 @@
 classdef FitQualityAssessor
     %FITQUALITYASSESSOR Quality categorization for Boltzmann fits
-    %   Classifies fits as Good/Acceptable/Poor/Failed based on R² and bounds
-    %   FIXED: Removed strict V_max > V_min check for raw conductance data
+    %   UPDATED: Added slope direction validation for activation/inactivation
     
     methods (Static)
         function quality = assessQuality(fitParams, gof, protocolType, config)
@@ -36,23 +35,38 @@ classdef FitQualityAssessor
         
         function isValid = checkParameterBounds(fitParams, protocolType, config)
             %CHECKPARAMETERBOUNDS Verify parameters are physically reasonable
-            %   FIXED: Removed V_max > V_min check (too strict for raw conductance)
+            %   UPDATED: Added slope direction validation
             
             isValid = true;
             
-            % Check slope factor k is within limits
+            % Check 1: V_max > V_min (required for both protocols)
+            % - Activation: V_max > V_min → curve rises (positive slope)
+            % - Inactivation: V_max > V_min → curve falls (negative slope)
+            % The equation form determines slope sign, not V_max vs V_min
+            if fitParams.V_max <= fitParams.V_min
+                isValid = false;
+                return;
+            end
+            
+            % Check 2: Slope factor k is within limits
             k = fitParams.k;
             if k < config.boltzmann.slopeLimits(1) || k > config.boltzmann.slopeLimits(2)
                 isValid = false;
                 return;
             end
             
-            % Check V_mid is within protocol-specific range
+            % Check 3: V_mid is within protocol-specific range
             V_mid = fitParams.V_mid;
             
             switch lower(protocolType)
                 case 'activation'
                     V_mid_range = config.boltzmann.activationVmidRange;
+                    
+                    % Additional check: V_mid must be negative for activation
+                    if V_mid >= 0
+                        isValid = false;
+                        return;
+                    end
                     
                 case 'inactivation'
                     V_mid_range = config.boltzmann.inactivationVmidRange;
@@ -66,10 +80,6 @@ classdef FitQualityAssessor
                 isValid = false;
                 return;
             end
-            
-            % REMOVED: V_max > V_min check
-            % This check was too strict for raw conductance data where the
-            % sigmoid may be inverted or near-flat. R² is a better quality metric.
         end
         
         function summary = summarizeFitResults(fittedData)

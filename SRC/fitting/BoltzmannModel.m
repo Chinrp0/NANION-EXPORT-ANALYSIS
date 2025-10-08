@@ -4,13 +4,15 @@ classdef BoltzmannModel
     
     methods (Static)
         function y = activation(V, V_min, V_max, V_mid, k)
-            %ACTIVATION Boltzmann activation equation
-            y = V_min + (V_max - V_min) ./ (1 + exp((V - V_mid) ./ k));
+            %ACTIVATION Boltzmann activation equation (RISING sigmoid)
+            %   Standard form: negative of (V - V_mid) in exponent
+            y = V_min + (V_max - V_min) ./ (1 + exp(-(V - V_mid) ./ k));
         end
         
         function y = inactivation(V, V_min, V_max, V_mid, k)
-            %INACTIVATION Boltzmann inactivation equation
-            y = V_min + (V_max - V_min) ./ (1 + exp((V_mid - V) ./ k));
+            %INACTIVATION Boltzmann inactivation equation (FALLING sigmoid)
+            %   Standard form: negative of (V_mid - V) in exponent
+            y = V_min + (V_max - V_min) ./ (1 + exp(-(V_mid - V) ./ k));
         end
         
         function ft = createFitType(protocolType)
@@ -19,14 +21,14 @@ classdef BoltzmannModel
             switch lower(protocolType)
                 case 'activation'
                     ft = fittype(...
-                        'V_min + (V_max - V_min) / (1 + exp((V - V_mid) / k))', ...
+                        'V_min + (V_max - V_min) / (1 + exp(-(V - V_mid) / k))', ...
                         'independent', 'V', ...
                         'dependent', 'I', ...
                         'coefficients', {'V_min', 'V_max', 'V_mid', 'k'});
                     
                 case 'inactivation'
                     ft = fittype(...
-                        'V_min + (V_max - V_min) / (1 + exp((V_mid - V) / k))', ...
+                        'V_min + (V_max - V_min) / (1 + exp(-(V_mid - V) / k))', ...
                         'independent', 'V', ...
                         'dependent', 'I', ...
                         'coefficients', {'V_min', 'V_max', 'V_mid', 'k'});

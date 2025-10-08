@@ -42,7 +42,34 @@ function plot_and_fit_wells()
         wellIdx = find(strcmp(filteredData.wellIDs, targetWell), 1);
         
         if isempty(wellIdx)
-            fprintf('⚠ Well %s not found in filtered data\n', targetWell);
+            fprintf('⚠ Well %s not found in filtered data (likely failed quality filters)\n', targetWell);
+            
+            % Try to find in UNFILTERED data
+            unfilteredIdx = find(strcmp(extractedData.wellIDs, targetWell), 1);
+            
+            if isempty(unfilteredIdx)
+                fprintf('  ✗ Well %s not found in raw data either\n', targetWell);
+                continue;
+            end
+            
+            fprintf('  → Plotting UNFILTERED data for %s (for visualization only)\n\n', targetWell);
+            
+            % Extract from unfiltered data
+            G_iv1 = extractedData.measurements.iv1.conductance(unfilteredIdx, :);
+            validIdx = ~isnan(G_iv1);
+            V_valid = voltages(validIdx);
+            G_valid = G_iv1(validIdx);
+            
+            % Plot without fitting
+            subplot(1, 3, plotIdx);
+            plot(V_valid, G_valid, 'ro', 'MarkerSize', 10, 'MarkerFaceColor', 'red');
+            grid on;
+            xlabel('Voltage (mV)', 'FontSize', 11);
+            ylabel('Conductance (nS)', 'FontSize', 11);
+            title(sprintf('Well %s\n❌ FAILED QUALITY FILTERS', targetWell), ...
+                'FontSize', 12, 'Interpreter', 'none', 'Color', 'red');
+            legend('IV1 Data (unfiltered)', 'Location', 'northwest', 'FontSize', 9);
+            
             continue;
         end
         
