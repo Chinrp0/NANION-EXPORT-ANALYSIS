@@ -330,68 +330,71 @@ classdef NanionBoltzmannFitter < handle
         end
     end
         
-        function wells = fitWellsParallel(obj, wells, wellIDs, voltages, ...
-                iv1Data, iv2Data, ivUsed, protocolType, dataType, dataUnits)
-            %FITWELLSPARALLEL Fit wells in parallel (errors harder to debug)
-            
-            numWells = length(wellIDs);
-            config = obj.config;
-            
-            obj.logger.logWarning('⚠ Using parallel processing - detailed errors may be suppressed');
-            
-            % Pre-initialize for parfor (avoids warning)
-            hasIV2 = ~isempty(iv2Data);
-            
-            parfor wellIdx = 1:numWells
-                % Fit IV1
-                iv1_data = iv1Data(wellIdx, :);
-                iv1Fit = NanionBoltzmannFitter.fitSingleWellStatic(...
-                    voltages, iv1_data, protocolType, 'iv1', config);
+             function wells = fitWellsParallel(obj, wells, wellIDs, voltages, ...
+                    iv1Data, iv2Data, ivUsed, protocolType, dataType, dataUnits)
+                %FITWELLSPARALLEL Fit wells in parallel (errors harder to debug)
                 
-                % Fit IV2 if available
-                if hasIV2
-                    iv2_data = iv2Data(wellIdx, :);
-                    iv2Fit = NanionBoltzmannFitter.fitSingleWellStatic(...
-                        voltages, iv2_data, protocolType, 'iv2', config);
-                else
-                    iv2Fit = struct('fitError', 'No IV2 data', 'fittedCurve', [], ...
-                        'fitParams', struct('converged', false), ...
-                        'fitQuality', 'Failed', 'validPoints', 0);
+                numWells = length(wellIDs);
+                config = obj.config;
+                
+                obj.logger.logWarning('⚠ Using parallel processing - detailed errors may be suppressed');
+                
+                % Pre-declare for parfor - MUST be before parfor loop
+                hasIV2 = ~isempty(iv2Data);
+                
+                parfor wellIdx = 1:numWells
+                    % Fit IV1
+                    iv1_data = iv1Data(wellIdx, :);
+                    iv1Fit = NanionBoltzmannFitter.fitSingleWellStatic(...
+                        voltages, iv1_data, protocolType, 'iv1', config);
+                    
+                    % Fit IV2 if available
+                    if hasIV2
+                        iv2_data = iv2Data(wellIdx, :);
+                        iv2Fit = NanionBoltzmannFitter.fitSingleWellStatic(...
+                            voltages, iv2_data, protocolType, 'iv2', config);
+                    else
+                        iv2Fit = struct(...
+                            'fitError', 'No IV2 data', ...
+                            'fittedCurve', [], ...
+                            'fitParams', struct('converged', false), ...
+                            'fitQuality', 'Failed', ...
+                            'validPoints', 0);
+                    end
+                    
+                    % Store results - BOTH IVs
+                    wells(wellIdx).wellID = wellIDs(wellIdx);
+                    wells(wellIdx).protocol = protocolType;
+                    wells(wellIdx).ivUsed = ivUsed(wellIdx);
+                    wells(wellIdx).voltages = voltages;
+                    wells(wellIdx).dataType = dataType;
+                    wells(wellIdx).dataUnits = dataUnits;
+                    
+                    % Store IV1
+                    wells(wellIdx).iv1 = struct(...
+                        'data', iv1_data, ...
+                        'validPoints', iv1Fit.validPoints, ...
+                        'fitParams', iv1Fit.fitParams, ...
+                        'fittedCurve', iv1Fit.fittedCurve, ...
+                        'fitQuality', iv1Fit.fitQuality, ...
+                        'fitError', iv1Fit.fitError);
+                    
+                    % Store IV2
+                    if hasIV2
+                        wells(wellIdx).iv2 = struct(...
+                            'data', iv2_data, ...
+                            'validPoints', iv2Fit.validPoints, ...
+                            'fitParams', iv2Fit.fitParams, ...
+                            'fittedCurve', iv2Fit.fittedCurve, ...
+                            'fitQuality', iv2Fit.fitQuality, ...
+                            'fitError', iv2Fit.fitError);
+                    else
+                        wells(wellIdx).iv2 = [];
+                    end
                 end
                 
-                % Store results - BOTH IVs
-                wells(wellIdx).wellID = wellIDs(wellIdx);
-                wells(wellIdx).protocol = protocolType;
-                wells(wellIdx).ivUsed = ivUsed(wellIdx);
-                wells(wellIdx).voltages = voltages;
-                wells(wellIdx).dataType = dataType;
-                wells(wellIdx).dataUnits = dataUnits;
-                
-                % Store IV1
-                wells(wellIdx).iv1 = struct(...
-                    'data', iv1_data, ...
-                    'validPoints', iv1Fit.validPoints, ...
-                    'fitParams', iv1Fit.fitParams, ...
-                    'fittedCurve', iv1Fit.fittedCurve, ...
-                    'fitQuality', iv1Fit.fitQuality, ...
-                    'fitError', iv1Fit.fitError);
-                
-                % Store IV2
-                if ~isempty(iv2Data)
-                    wells(wellIdx).iv2 = struct(...
-                        'data', iv2_data, ...
-                        'validPoints', iv2Fit.validPoints, ...
-                        'fitParams', iv2Fit.fitParams, ...
-                        'fittedCurve', iv2Fit.fittedCurve, ...
-                        'fitQuality', iv2Fit.fitQuality, ...
-                        'fitError', iv2Fit.fitError);
-                else
-                    wells(wellIdx).iv2 = [];
-                end
+                obj.logger.logInfo(sprintf('Parallel fitting complete: %d wells processed', numWells));
             end
-            
-            obj.logger.logInfo(sprintf('Parallel fitting complete: %d wells processed', numWells));
-        end
 
         function summary = generateFitSummary(obj, wells)
             %GENERATEFITSUMMARY Generate summary statistics from nested IV structure

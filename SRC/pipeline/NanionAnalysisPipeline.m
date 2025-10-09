@@ -3,12 +3,15 @@ classdef NanionAnalysisPipeline < handle
     %   Orchestrates the complete analysis workflow with proper error handling
     %   and logging. Designed for both single-file and batch processing.
     
-    properties (Access = private)
+    properties (Access = public)  % Changed from private
         config
         logger
+    end
+    
+    properties (Access = private)
         ioManager
         fileDetector
-        dataExtractor  % ADDED FOR PHASE 2
+        dataExtractor
         results
     end
     

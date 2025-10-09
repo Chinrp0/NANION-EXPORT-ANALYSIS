@@ -59,7 +59,7 @@ classdef NanionBoltzmannPlotter < handle
                     'Color', obj.colors.iv1, ...
                     'LineWidth', fitLineWidth, ...
                     'DisplayName', sprintf('IV1 Fit (V_{1/2}=%.1f, k=%.1f)', ...
-                        iv1Fit.params.V_mid, iv1Fit.params.k));
+                        iv1Fit.fitParams.V_mid, iv1Fit.fitParams.k));
             end
             
             % IV2 Conductance data (circles, filled, blue)
@@ -78,7 +78,7 @@ classdef NanionBoltzmannPlotter < handle
                         'Color', obj.colors.iv2, ...
                         'LineWidth', fitLineWidth, ...
                         'DisplayName', sprintf('IV2 Fit (V_{1/2}=%.1f, k=%.1f)', ...
-                            iv2Fit.params.V_mid, iv2Fit.params.k));
+                            iv2Fit.fitParams.V_mid, iv2Fit.fitParams.k));
                 end
             end
             
@@ -126,10 +126,10 @@ classdef NanionBoltzmannPlotter < handle
             
             % Title with fit quality (indicate normalized conductance)
             if ~isempty(iv1Fit)
-                titleStr = sprintf('Well %s: Activation Protocol - Normalized (IV1: R^2=%.3f)', ...
-                    wellID, iv1Fit.quality.rsquared);
+                titleStr = sprintf('Well %s: Activation Protocol (IV1: R^2=%.3f)', ...
+                    wellID, iv1Fit.fitParams.R2);
             else
-                titleStr = sprintf('Well %s: Activation Protocol - Normalized', wellID);
+                titleStr = sprintf('Well %s: Activation Protocol', wellID);
             end
             title(titleStr, 'FontSize', 14, 'FontWeight', 'bold');
             
@@ -142,8 +142,8 @@ classdef NanionBoltzmannPlotter < handle
             ax.Box = 'on';
             ax.LineWidth = 1.2;
             
-            legend('Location', 'best', 'FontSize', 9, 'Box', 'off', ...
-                'NumColumns', 2);  % Two-column legend to save space
+            legend('Location', 'west', 'FontSize', 9, 'Box', 'off', ...
+                'NumColumns', 1);  % Single column, top-left position
             
             hold off;
             
@@ -184,7 +184,7 @@ classdef NanionBoltzmannPlotter < handle
                     'Color', obj.colors.iv1, ...
                     'LineWidth', fitLineWidth, ...
                     'DisplayName', sprintf('IV1 Fit (V_{1/2}=%.1f, k=%.1f)', ...
-                        iv1Fit.params.V_mid, iv1Fit.params.k));
+                        iv1Fit.fitParams.V_mid, iv1Fit.fitParams.k));
             end
             
             % IV2 Normalized Inactivation (blue circles, filled)
@@ -204,7 +204,7 @@ classdef NanionBoltzmannPlotter < handle
                         'Color', obj.colors.iv2, ...
                         'LineWidth', fitLineWidth, ...
                         'DisplayName', sprintf('IV2 Fit (V_{1/2}=%.1f, k=%.1f)', ...
-                            iv2Fit.params.V_mid, iv2Fit.params.k));
+                            iv2Fit.fitParams.V_mid, iv2Fit.fitParams.k));
                 end
             end
             
@@ -254,7 +254,7 @@ classdef NanionBoltzmannPlotter < handle
             % Title
             titleStr = sprintf('Well %s: Inactivation Protocol', wellID);
             if ~isempty(iv1Fit)
-                titleStr = sprintf('%s (IV1: R^2=%.3f)', titleStr, iv1Fit.quality.rsquared);
+                titleStr = sprintf('%s (IV1: R^2=%.3f)', titleStr, iv1Fit.fitParams.R2);
             end
             title(titleStr, 'FontSize', 14, 'FontWeight', 'bold');
             
@@ -266,8 +266,8 @@ classdef NanionBoltzmannPlotter < handle
             ax.Box = 'on';
             ax.LineWidth = 1.2;
             
-            legend('Location', 'best', 'FontSize', 9, 'Box', 'off', 'NumColumns', 2);
-            
+            legend('Location', 'west', 'FontSize', 9, 'Box', 'off', 'NumColumns', 1);  % Single column, top-right position
+
             hold off;
             
             obj.logger.logInfo(sprintf('Plotted dual-axis inactivation for well %s', wellID));
