@@ -48,6 +48,7 @@ classdef NanionDataExtractor < handle
                 % Calculate conductance for activation protocols
                 if strcmp(protocolInfo.type, 'activation')
                     extractedData = obj.calculateConductance(extractedData);
+                    extractedData = obj.normalizeConductance(extractedData);  % NEW: Add this line
                 end
                 
             catch ME
@@ -105,7 +106,56 @@ classdef NanionDataExtractor < handle
                 extractedData.numWells));
         end
 
-        
+        function extractedData = normalizeConductance(obj, extractedData)
+            %NORMALIZECONDUCTANCE Normalize conductance to 0-1 range per well per IV
+            %   G_norm = (G - G_min) / (G_max - G_min)
+            %   Only applies to activation protocols
+            %   Stores both raw and normalized conductance
+            
+            if ~strcmp(extractedData.protocolInfo.type, 'activation')
+                return;  % Only for activation protocols
+            end
+            
+            obj.logger.logInfo('Normalizing conductance to 0-1 range per well...');
+            
+            measurements = extractedData.measurements;
+            ivFields = fieldnames(measurements);
+            
+            for i = 1:length(ivFields)
+                ivName = ivFields{i};
+                
+                % Get raw conductance [numWells × 23] in nS
+                conductance_raw = measurements.(ivName).conductance;
+                numWells = size(conductance_raw, 1);
+                
+                % Normalize each well independently
+                conductance_normalized = zeros(size(conductance_raw));
+                
+                for wellIdx = 1:numWells
+                    G = conductance_raw(wellIdx, :);
+                    G_min = min(G);
+                    G_max = max(G);
+                    
+                    if G_max ~= G_min  % Avoid division by zero
+                        conductance_normalized(wellIdx, :) = (G - G_min) / (G_max - G_min);
+                    else
+                        conductance_normalized(wellIdx, :) = zeros(size(G));
+                        obj.logger.logWarning(sprintf('%s Well %d: G_max == G_min, setting normalized to 0', ...
+                            ivName, wellIdx));
+                    end
+                end
+                
+                % Store both raw and normalized
+                measurements.(ivName).conductance_raw = conductance_raw;  % Preserve original
+                measurements.(ivName).conductance = conductance_normalized;  % Replace with normalized
+                
+                obj.logger.logDebug(sprintf('%s: Normalized conductance for %d wells', ivName, numWells));
+            end
+            
+            extractedData.measurements = measurements;
+            obj.logger.logInfo('✓ Conductance normalized (0-1 range)');
+        end
+
         function filteredData = applyQualityFilters(obj, extractedData)
             %APPLYQUALITYFILTERS Apply MEDIAN-BASED filters with IV2 fallback
             %   ROBUST: Uses median across 23 sweeps (resistant to outliers)

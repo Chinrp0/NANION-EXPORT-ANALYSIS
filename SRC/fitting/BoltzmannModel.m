@@ -97,6 +97,13 @@ classdef BoltzmannModel
             upperBounds = [V_min_upper, V_max_upper, V_mid_upper, k_upper];
         end
         
+        function y = evaluateBoltzmann(V, V_min, V_max, V_mid, k)
+            %EVALUATEBOLTZMANN Evaluate Boltzmann equation at voltage points
+            %   y = V_min + (V_max - V_min) / (1 + exp((V_mid - V) / k))
+            
+            y = V_min + (V_max - V_min) ./ (1 + exp((V_mid - V) / k));
+        end
+        
         function z_a = calculateGatingCharge(k, temperature)
             %CALCULATEGATINGCHARGE Calculate apparent gating charge
             %   z_a = RT/F / k (elementary charges)

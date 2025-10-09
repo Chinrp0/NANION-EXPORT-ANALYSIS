@@ -79,11 +79,16 @@ classdef NanionBoltzmannFitter < handle
                 end
 
             
-            % Initialize wells array
-            wells(numWells) = struct(...
-                'wellID', '', 'protocol', '', 'ivUsed', '', ...
-                'voltages', [], 'data', [], 'dataType', dataType, 'dataUnits', dataUnits, ...
-                'validPoints', 0, 'fitParams', struct(), 'fitQuality', '', 'fitError', '');
+                % Initialize wells array - UPDATED STRUCTURE
+                wells(numWells) = struct(...
+                    'wellID', '', ...
+                    'protocol', '', ...
+                    'ivUsed', '', ...
+                    'voltages', [], ...
+                    'dataType', dataType, ...
+                    'dataUnits', dataUnits, ...
+                    'iv1', struct(), ...
+                    'iv2', []);
             
             % Fit wells (sequential for debugging)
             if obj.config.boltzmann.useParallel && numWells > 1
@@ -96,8 +101,22 @@ classdef NanionBoltzmannFitter < handle
                     iv1Data, iv2Data, ivUsed, protocolType, dataType, dataUnits);
             end
             
-            % Generate summary statistics
-            summary = FitQualityAssessor.summarizeFitResults(struct('wells', wells));
+
+            % Generate summary statistics from new nested structure
+            summary = obj.generateFitSummary(wells);
+            
+            % Package results
+            fittedData = struct(...
+                'wells', wells, ...
+                'summary', summary, ...
+                'numWells', numWells, ...
+                'protocol', protocolType, ...
+                'dataType', dataType, ...
+                'dataUnits', dataUnits);
+            
+            obj.logger.logInfo(sprintf('✓ Boltzmann fitting complete: %d Good, %d Acceptable, %d Poor, %d Failed', ...
+                summary.fitResults.good, summary.fitResults.acceptable, ...
+                summary.fitResults.poor, summary.fitResults.failed));
             
             % Package results
             fittedData = struct(...
@@ -142,9 +161,10 @@ classdef NanionBoltzmannFitter < handle
             
             try
                 % Get initial parameters and bounds
-                % For normalized inactivation, adjust bounds to 0-1 range
-                if strcmp(protocolType, 'inactivation') && max(D_valid) <= 1.5 && min(D_valid) >= -0.5
-                    % Data appears to be normalized (0-1 range)
+                % Detect if data is normalized (0-1 range) - applies to both inactivation AND activation
+                if (strcmp(protocolType, 'inactivation') || strcmp(protocolType, 'activation')) && ...
+                   max(D_valid) <= 1.5 && min(D_valid) >= -0.5
+                    % Data appears to be normalized
                     [startPoints, lowerBounds, upperBounds] = BoltzmannModel.getInitialParams(...
                         V_valid, D_valid, protocolType, obj.config);
                     
@@ -153,12 +173,10 @@ classdef NanionBoltzmannFitter < handle
                     upperBounds(1) = 0.2;      % V_min upper bound
                     lowerBounds(2) = 0.8;      % V_max lower bound
                     upperBounds(2) = 1.2;      % V_max upper bound
-                    
-                    % Adjust start points for normalized data
                     startPoints(1) = 0.0;      % V_min start
                     startPoints(2) = 1.0;      % V_max start
                     
-                    obj.logger.logDebug('Using normalized data bounds (0-1) for inactivation fitting');
+                    obj.logger.logDebug('Using normalized data bounds (0-1)');
                 else
                     [startPoints, lowerBounds, upperBounds] = BoltzmannModel.getInitialParams(...
                         V_valid, D_valid, protocolType, obj.config);
@@ -193,11 +211,16 @@ classdef NanionBoltzmannFitter < handle
                     'RMSE', gof.rmse, ...
                     'converged', true);
                 
+                % Generate fitted curve by evaluating Boltzmann at all voltage points
+                fittedCurve = BoltzmannModel.evaluateBoltzmann(...
+                    voltages, fitresult.V_min, fitresult.V_max, fitresult.V_mid, fitresult.k);
+                
                 % Assess fit quality
                 quality = FitQualityAssessor.assessQuality(fitParams, gof, protocolType, obj.config);
                 
                 % Update result
                 wellFit.fitParams = fitParams;
+                wellFit.fittedCurve = fittedCurve;  % NEW
                 wellFit.fitQuality = quality;
                 wellFit.fitError = ''; % Success
                 
@@ -227,56 +250,85 @@ classdef NanionBoltzmannFitter < handle
     
     methods (Access = private)
         function wells = fitWellsSequential(obj, wells, wellIDs, voltages, ...
-                iv1Data, iv2Data, ivUsed, protocolType, dataType, dataUnits)
-            %FITWELLSSEQUENTIAL Fit wells one by one with error tracking
+            iv1Data, iv2Data, ivUsed, protocolType, dataType, dataUnits)
+        %FITWELLSSEQUENTIAL Fit ALL available IVs for each well
+        
+        numWells = length(wellIDs);
+        errorCount = 0;
+        hasIV2 = ~isempty(iv2Data);
+        
+        for wellIdx = 1:numWells
+            % Fit IV1 (always available)
+            iv1_data = iv1Data(wellIdx, :);
+            iv1Fit = obj.fitSingleWell(voltages, iv1_data, protocolType, 'iv1');
             
-            numWells = length(wellIDs);
-            errorCount = 0;
+            % Fit IV2 (if available)
+            if hasIV2
+                iv2_data = iv2Data(wellIdx, :);
+                iv2Fit = obj.fitSingleWell(voltages, iv2_data, protocolType, 'iv2');
+            else
+                iv2Fit = [];
+            end
             
-            for wellIdx = 1:numWells
-                % Get data for this well
-                if strcmp(ivUsed(wellIdx), 'iv1')
-                    data = iv1Data(wellIdx, :);
-                else
-                    data = iv2Data(wellIdx, :);
-                end
-                
-                % Fit well
-                wellFit = obj.fitSingleWell(voltages, data, protocolType, ivUsed(wellIdx));
-                
-                % Track errors
-                if ~isempty(wellFit.fitError)
-                    errorCount = errorCount + 1;
-                    if errorCount <= 3  % Log first 3 errors in detail
-                        obj.logger.logError(sprintf('Well %d (%s): %s', ...
-                            wellIdx, wellIDs(wellIdx), wellFit.fitError));
-                    end
-                end
-                
-                % Store result
-                wells(wellIdx).wellID = wellIDs(wellIdx);
-                wells(wellIdx).protocol = protocolType;
-                wells(wellIdx).ivUsed = wellFit.ivUsed;
-                wells(wellIdx).voltages = wellFit.voltages;
-                wells(wellIdx).data = wellFit.data;
-                wells(wellIdx).dataType = dataType;
-                wells(wellIdx).dataUnits = dataUnits;
-                wells(wellIdx).validPoints = wellFit.validPoints;
-                wells(wellIdx).fitParams = wellFit.fitParams;
-                wells(wellIdx).fitQuality = wellFit.fitQuality;
-                wells(wellIdx).fitError = wellFit.fitError;
-                
-                % Progress logging
-                if mod(wellIdx, 10) == 0 || wellIdx == numWells
-                    obj.logger.logInfo(sprintf('Fitting progress: %d/%d wells (%d errors so far)', ...
-                        wellIdx, numWells, errorCount));
+            % Track errors from either IV
+            if ~isempty(iv1Fit.fitError)
+                errorCount = errorCount + 1;
+                if errorCount <= 3
+                    obj.logger.logError(sprintf('Well %d (%s) IV1: %s', ...
+                        wellIdx, wellIDs(wellIdx), iv1Fit.fitError));
                 end
             end
             
-            if errorCount > 0
-                obj.logger.logWarning(sprintf('⚠ Total fitting errors: %d/%d wells', errorCount, numWells));
+            if hasIV2 && ~isempty(iv2Fit.fitError)
+                errorCount = errorCount + 1;
+                if errorCount <= 3
+                    obj.logger.logError(sprintf('Well %d (%s) IV2: %s', ...
+                        wellIdx, wellIDs(wellIdx), iv2Fit.fitError));
+                end
+            end
+            
+            % Store results - BOTH IVs
+            wells(wellIdx).wellID = wellIDs(wellIdx);
+            wells(wellIdx).protocol = protocolType;
+            wells(wellIdx).ivUsed = ivUsed(wellIdx);  % For quality reference
+            wells(wellIdx).voltages = voltages;
+            wells(wellIdx).dataType = dataType;
+            wells(wellIdx).dataUnits = dataUnits;
+            
+            % Store IV1 fit
+            wells(wellIdx).iv1 = struct(...
+                'data', iv1_data, ...
+                'validPoints', iv1Fit.validPoints, ...
+                'fitParams', iv1Fit.fitParams, ...
+                'fittedCurve', iv1Fit.fittedCurve, ...
+                'fitQuality', iv1Fit.fitQuality, ...
+                'fitError', iv1Fit.fitError);
+            
+            % Store IV2 fit (if exists)
+            if hasIV2
+                wells(wellIdx).iv2 = struct(...
+                    'data', iv2_data, ...
+                    'validPoints', iv2Fit.validPoints, ...
+                    'fitParams', iv2Fit.fitParams, ...
+                    'fittedCurve', iv2Fit.fittedCurve, ...
+                    'fitQuality', iv2Fit.fitQuality, ...
+                    'fitError', iv2Fit.fitError);
+            else
+                wells(wellIdx).iv2 = [];
+            end
+            
+            % Progress logging
+            if mod(wellIdx, 10) == 0 || wellIdx == numWells
+                obj.logger.logInfo(sprintf('Fitting progress: %d/%d wells (%d errors)', ...
+                    wellIdx, numWells, errorCount));
             end
         end
+        
+        if errorCount > 0
+            obj.logger.logWarning(sprintf('⚠ Total fitting errors: %d/%d IVs', ...
+                errorCount, numWells * (1 + hasIV2)));
+        end
+    end
         
         function wells = fitWellsParallel(obj, wells, wellIDs, voltages, ...
                 iv1Data, iv2Data, ivUsed, protocolType, dataType, dataUnits)
@@ -287,35 +339,143 @@ classdef NanionBoltzmannFitter < handle
             
             obj.logger.logWarning('⚠ Using parallel processing - detailed errors may be suppressed');
             
+            % Pre-initialize for parfor (avoids warning)
+            hasIV2 = ~isempty(iv2Data);
+            
             parfor wellIdx = 1:numWells
-                if strcmp(ivUsed(wellIdx), 'iv1')
-                    data = iv1Data(wellIdx, :);
+                % Fit IV1
+                iv1_data = iv1Data(wellIdx, :);
+                iv1Fit = NanionBoltzmannFitter.fitSingleWellStatic(...
+                    voltages, iv1_data, protocolType, 'iv1', config);
+                
+                % Fit IV2 if available
+                if hasIV2
+                    iv2_data = iv2Data(wellIdx, :);
+                    iv2Fit = NanionBoltzmannFitter.fitSingleWellStatic(...
+                        voltages, iv2_data, protocolType, 'iv2', config);
                 else
-                    if ~isempty(iv2Data)
-                        data = iv2Data(wellIdx, :);
-                    else
-                        data = iv1Data(wellIdx, :);
-                    end
+                    iv2Fit = struct('fitError', 'No IV2 data', 'fittedCurve', [], ...
+                        'fitParams', struct('converged', false), ...
+                        'fitQuality', 'Failed', 'validPoints', 0);
                 end
                 
-                wellFit = NanionBoltzmannFitter.fitSingleWellStatic(...
-                    voltages, data, protocolType, ivUsed(wellIdx), config);
-                
+                % Store results - BOTH IVs
                 wells(wellIdx).wellID = wellIDs(wellIdx);
                 wells(wellIdx).protocol = protocolType;
-                wells(wellIdx).ivUsed = wellFit.ivUsed;
-                wells(wellIdx).voltages = wellFit.voltages;
-                wells(wellIdx).data = wellFit.data;
+                wells(wellIdx).ivUsed = ivUsed(wellIdx);
+                wells(wellIdx).voltages = voltages;
                 wells(wellIdx).dataType = dataType;
                 wells(wellIdx).dataUnits = dataUnits;
-                wells(wellIdx).validPoints = wellFit.validPoints;
-                wells(wellIdx).fitParams = wellFit.fitParams;
-                wells(wellIdx).fitQuality = wellFit.fitQuality;
-                wells(wellIdx).fitError = wellFit.fitError;
+                
+                % Store IV1
+                wells(wellIdx).iv1 = struct(...
+                    'data', iv1_data, ...
+                    'validPoints', iv1Fit.validPoints, ...
+                    'fitParams', iv1Fit.fitParams, ...
+                    'fittedCurve', iv1Fit.fittedCurve, ...
+                    'fitQuality', iv1Fit.fitQuality, ...
+                    'fitError', iv1Fit.fitError);
+                
+                % Store IV2
+                if ~isempty(iv2Data)
+                    wells(wellIdx).iv2 = struct(...
+                        'data', iv2_data, ...
+                        'validPoints', iv2Fit.validPoints, ...
+                        'fitParams', iv2Fit.fitParams, ...
+                        'fittedCurve', iv2Fit.fittedCurve, ...
+                        'fitQuality', iv2Fit.fitQuality, ...
+                        'fitError', iv2Fit.fitError);
+                else
+                    wells(wellIdx).iv2 = [];
+                end
             end
             
             obj.logger.logInfo(sprintf('Parallel fitting complete: %d wells processed', numWells));
         end
+
+        function summary = generateFitSummary(obj, wells)
+            %GENERATEFITSUMMARY Generate summary statistics from nested IV structure
+            %   Counts fit quality across both IV1 and IV2
+            
+            numWells = length(wells);
+            
+            % Count fit quality for IV1 and IV2 separately
+            iv1_good = 0;
+            iv1_acceptable = 0;
+            iv1_poor = 0;
+            iv1_failed = 0;
+            
+            iv2_good = 0;
+            iv2_acceptable = 0;
+            iv2_poor = 0;
+            iv2_failed = 0;
+            
+            for i = 1:numWells
+                % Count IV1 results
+                if ~isempty(wells(i).iv1) && isfield(wells(i).iv1, 'fitQuality')
+                    switch wells(i).iv1.fitQuality
+                        case 'Good'
+                            iv1_good = iv1_good + 1;
+                        case 'Acceptable'
+                            iv1_acceptable = iv1_acceptable + 1;
+                        case 'Poor'
+                            iv1_poor = iv1_poor + 1;
+                        case 'Failed'
+                            iv1_failed = iv1_failed + 1;
+                    end
+                else
+                    iv1_failed = iv1_failed + 1;
+                end
+                
+                % Count IV2 results (if exists)
+                if ~isempty(wells(i).iv2) && isfield(wells(i).iv2, 'fitQuality')
+                    switch wells(i).iv2.fitQuality
+                        case 'Good'
+                            iv2_good = iv2_good + 1;
+                        case 'Acceptable'
+                            iv2_acceptable = iv2_acceptable + 1;
+                        case 'Poor'
+                            iv2_poor = iv2_poor + 1;
+                        case 'Failed'
+                            iv2_failed = iv2_failed + 1;
+                    end
+                end
+            end
+            
+            % Combined totals (for backward compatibility)
+            total_good = iv1_good + iv2_good;
+            total_acceptable = iv1_acceptable + iv2_acceptable;
+            total_poor = iv1_poor + iv2_poor;
+            total_failed = iv1_failed + iv2_failed;
+            
+            % Build summary structure
+            summary = struct(...
+                'fitResults', struct(...
+                    'good', total_good, ...
+                    'acceptable', total_acceptable, ...
+                    'poor', total_poor, ...
+                    'failed', total_failed), ...
+                'iv1Results', struct(...
+                    'good', iv1_good, ...
+                    'acceptable', iv1_acceptable, ...
+                    'poor', iv1_poor, ...
+                    'failed', iv1_failed), ...
+                'iv2Results', struct(...
+                    'good', iv2_good, ...
+                    'acceptable', iv2_acceptable, ...
+                    'poor', iv2_poor, ...
+                    'failed', iv2_failed), ...
+                'numWells', numWells);
+            
+            obj.logger.logDebug(sprintf('Summary: IV1 (%d good, %d acceptable, %d poor, %d failed)', ...
+                iv1_good, iv1_acceptable, iv1_poor, iv1_failed));
+            
+            if iv2_good + iv2_acceptable + iv2_poor + iv2_failed > 0
+                obj.logger.logDebug(sprintf('Summary: IV2 (%d good, %d acceptable, %d poor, %d failed)', ...
+                    iv2_good, iv2_acceptable, iv2_poor, iv2_failed));
+            end
+        end
+
     end
     
     methods (Static)
@@ -343,21 +503,26 @@ classdef NanionBoltzmannFitter < handle
             end
             
             try
-                % Get initial parameters and bounds
-                if strcmp(protocolType, 'inactivation') && max(D_valid) <= 1.5 && min(D_valid) >= -0.5
+               % Get initial parameters and bounds
+                % Detect if data is normalized (0-1 range) - applies to both inactivation AND activation
+                if (strcmp(protocolType, 'inactivation') || strcmp(protocolType, 'activation')) && ...
+                   max(D_valid) <= 1.5 && min(D_valid) >= -0.5
+                    % Data appears to be normalized
                     [startPoints, lowerBounds, upperBounds] = BoltzmannModel.getInitialParams(...
-                        V_valid, D_valid, protocolType, config);
+                        V_valid, D_valid, protocolType, obj.config);
                     
-                    % Override for normalized data
-                    lowerBounds(1) = 0.0;
-                    upperBounds(1) = 0.2;
-                    lowerBounds(2) = 0.8;
-                    upperBounds(2) = 1.2;
-                    startPoints(1) = 0.0;
-                    startPoints(2) = 1.0;
+                    % Override V_min and V_max bounds for normalized data
+                    lowerBounds(1) = 0.0;      % V_min lower bound
+                    upperBounds(1) = 0.2;      % V_min upper bound
+                    lowerBounds(2) = 0.8;      % V_max lower bound
+                    upperBounds(2) = 1.2;      % V_max upper bound
+                    startPoints(1) = 0.0;      % V_min start
+                    startPoints(2) = 1.0;      % V_max start
+                    
+                    obj.logger.logDebug('Using normalized data bounds (0-1)');
                 else
                     [startPoints, lowerBounds, upperBounds] = BoltzmannModel.getInitialParams(...
-                        V_valid, D_valid, protocolType, config);
+                        V_valid, D_valid, protocolType, obj.config);
                 end
                 
                 ft = BoltzmannModel.createFitType(protocolType);
@@ -379,9 +544,14 @@ classdef NanionBoltzmannFitter < handle
                     'RMSE', gof.rmse, ...
                     'converged', true);
                 
+                % Generate fitted curve
+                fittedCurve = BoltzmannModel.evaluateBoltzmann(...
+                    voltages, fitresult.V_min, fitresult.V_max, fitresult.V_mid, fitresult.k);
+                
                 quality = FitQualityAssessor.assessQuality(fitParams, gof, protocolType, config);
                 
                 wellFit.fitParams = fitParams;
+                wellFit.fittedCurve = fittedCurve;  % NEW
                 wellFit.fitQuality = quality;
                 wellFit.fitError = '';
                 

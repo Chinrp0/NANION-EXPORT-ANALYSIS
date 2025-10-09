@@ -141,7 +141,7 @@ function fitResult = extractFitResult(fittedData, wellIdx, protocolInfo)
     
     if isempty(fittedData) || wellIdx > length(fittedData.wells)
         fitResult = [];
-        return;
+        return; 
     end
     
     wellFit = fittedData.wells(wellIdx);

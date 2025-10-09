@@ -82,7 +82,7 @@ classdef NanionBoltzmannPlotter < handle
                 end
             end
             
-            ylabel('Conductance (nS)', 'FontSize', 12, 'FontWeight', 'bold');
+            ylabel('Normalized Conductance (0-1)', 'FontSize', 12, 'FontWeight', 'bold');
             ax = gca;
             ax.YColor = [0, 0, 0];  % Black for left axis
             ylim_left = ylim;
@@ -124,12 +124,12 @@ classdef NanionBoltzmannPlotter < handle
             xlabel('Voltage (mV)', 'FontSize', 12, 'FontWeight', 'bold');
             xlim([min(voltages) - 5, max(voltages) + 5]);
             
-            % Title with fit quality
+            % Title with fit quality (indicate normalized conductance)
             if ~isempty(iv1Fit)
-                titleStr = sprintf('Well %s: Activation Protocol (IV1: R^2=%.3f)', ...
+                titleStr = sprintf('Well %s: Activation Protocol - Normalized (IV1: R^2=%.3f)', ...
                     wellID, iv1Fit.quality.rsquared);
             else
-                titleStr = sprintf('Well %s: Activation Protocol', wellID);
+                titleStr = sprintf('Well %s: Activation Protocol - Normalized', wellID);
             end
             title(titleStr, 'FontSize', 14, 'FontWeight', 'bold');
             
