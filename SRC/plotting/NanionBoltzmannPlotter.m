@@ -165,7 +165,8 @@ classdef NanionBoltzmannPlotter < handle
             markerAlpha = 0.85;
             
             %% TOP PANEL: Normalized Inactivation
-            subplot(2, 1, 1);
+            % Use position: [left, bottom, width, height]
+            subplot('Position', [0.10, 0.55, 0.85, 0.38]);
             hold on;
             
             % IV1 Normalized Inactivation (circles, filled, black)
@@ -223,7 +224,8 @@ classdef NanionBoltzmannPlotter < handle
             hold off;
             
             %% BOTTOM PANEL: Test Pulse Current
-            subplot(2, 1, 2);
+            % Use position: [left, bottom, width, height]
+            subplot('Position', [0.10, 0.08, 0.85, 0.38]);
             hold on;
             
             % IV1 Test Pulse Current (circles, filled, black)

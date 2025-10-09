@@ -80,51 +80,99 @@ function test_dual_axis_plotting()
     for i = 1:numToPlot
         wellID = filteredData.wellIDs(i);
         
-        % Extract IV1 data
-        iv1Data = struct(...
-            'conductance', filteredData.measurements.iv1.conductance(i, :), ...
-            'peakCurrent', filteredData.measurements.iv1.peakCurrent(i, :));
-        
-        % Extract IV2 data
-        if isfield(filteredData.measurements, 'iv2')
-            iv2Data = struct(...
-                'conductance', filteredData.measurements.iv2.conductance(i, :), ...
-                'peakCurrent', filteredData.measurements.iv2.peakCurrent(i, :));
-        else
-            iv2Data = [];
-        end
-        
-        % Get fit results and generate fitted curves
-        iv1Fit = [];
-        if ~isempty(fittedData_iv1)
-            wellFit = fittedData_iv1.wells(i);
-            if wellFit.fitParams.converged
-                % Generate fitted curve from parameters
-                fittedCurve = generateFittedCurve(protocolInfo.voltages, ...
-                    wellFit.fitParams, protocolInfo.type);
-                iv1Fit = struct(...
-                    'params', wellFit.fitParams, ...
-                    'quality', struct('rsquared', wellFit.fitParams.R2), ...
-                    'fittedCurve', fittedCurve);
+        % Check protocol type and extract appropriate data
+        if strcmp(protocolInfo.type, 'activation')
+            % Extract IV1 data (activation)
+            iv1Data = struct(...
+                'conductance', filteredData.measurements.iv1.conductance(i, :), ...
+                'peakCurrent', filteredData.measurements.iv1.peakCurrent(i, :));
+            
+            % Extract IV2 data (activation)
+            if isfield(filteredData.measurements, 'iv2')
+                iv2Data = struct(...
+                    'conductance', filteredData.measurements.iv2.conductance(i, :), ...
+                    'peakCurrent', filteredData.measurements.iv2.peakCurrent(i, :));
+            else
+                iv2Data = [];
             end
-        end
-        
-        iv2Fit = [];
-        if ~isempty(fittedData_iv2)
-            wellFit = fittedData_iv2.wells(i);
-            if wellFit.fitParams.converged
-                fittedCurve = generateFittedCurve(protocolInfo.voltages, ...
-                    wellFit.fitParams, protocolInfo.type);
-                iv2Fit = struct(...
-                    'params', wellFit.fitParams, ...
-                    'quality', struct('rsquared', wellFit.fitParams.R2), ...
-                    'fittedCurve', fittedCurve);
+            
+            % Get fit results and generate fitted curves
+            iv1Fit = [];
+            if ~isempty(fittedData_iv1)
+                wellFit = fittedData_iv1.wells(i);
+                if wellFit.fitParams.converged
+                    fittedCurve = generateFittedCurve(protocolInfo.voltages, ...
+                        wellFit.fitParams, protocolInfo.type);
+                    iv1Fit = struct(...
+                        'params', wellFit.fitParams, ...
+                        'quality', struct('rsquared', wellFit.fitParams.R2), ...
+                        'fittedCurve', fittedCurve);
+                end
             end
+            
+            iv2Fit = [];
+            if ~isempty(fittedData_iv2)
+                wellFit = fittedData_iv2.wells(i);
+                if wellFit.fitParams.converged
+                    fittedCurve = generateFittedCurve(protocolInfo.voltages, ...
+                        wellFit.fitParams, protocolInfo.type);
+                    iv2Fit = struct(...
+                        'params', wellFit.fitParams, ...
+                        'quality', struct('rsquared', wellFit.fitParams.R2), ...
+                        'fittedCurve', fittedCurve);
+                end
+            end
+            
+            % Generate activation plot
+            plotter.plotActivationDualAxis(wellID, protocolInfo.voltages, ...
+                iv1Data, iv2Data, iv1Fit, iv2Fit);
+            
+        else  % inactivation
+            % Extract IV1 data (inactivation)
+            iv1Data = struct(...
+                'inactivationData', filteredData.measurements.iv1.inactivationData(i, :), ...
+                'activationData', filteredData.measurements.iv1.activationData(i, :));
+            
+            % Extract IV2 data (inactivation)
+            if isfield(filteredData.measurements, 'iv2')
+                iv2Data = struct(...
+                    'inactivationData', filteredData.measurements.iv2.inactivationData(i, :), ...
+                    'activationData', filteredData.measurements.iv2.activationData(i, :));
+            else
+                iv2Data = [];
+            end
+            
+            % Get fit results (same structure as activation)
+            iv1Fit = [];
+            if ~isempty(fittedData_iv1)
+                wellFit = fittedData_iv1.wells(i);
+                if wellFit.fitParams.converged
+                    fittedCurve = generateFittedCurve(protocolInfo.voltages, ...
+                        wellFit.fitParams, protocolInfo.type);
+                    iv1Fit = struct(...
+                        'params', wellFit.fitParams, ...
+                        'quality', struct('rsquared', wellFit.fitParams.R2), ...
+                        'fittedCurve', fittedCurve);
+                end
+            end
+            
+            iv2Fit = [];
+            if ~isempty(fittedData_iv2)
+                wellFit = fittedData_iv2.wells(i);
+                if wellFit.fitParams.converged
+                    fittedCurve = generateFittedCurve(protocolInfo.voltages, ...
+                        wellFit.fitParams, protocolInfo.type);
+                    iv2Fit = struct(...
+                        'params', wellFit.fitParams, ...
+                        'quality', struct('rsquared', wellFit.fitParams.R2), ...
+                        'fittedCurve', fittedCurve);
+                end
+            end
+            
+            % Generate inactivation plot
+            plotter.plotInactivationDualPanel(wellID, protocolInfo.voltages, ...
+                iv1Data, iv2Data, iv1Fit, iv2Fit);
         end
-        
-        % Generate plot
-        plotter.plotActivationDualAxis(wellID, protocolInfo.voltages, ...
-            iv1Data, iv2Data, iv1Fit, iv2Fit);
         
         fprintf('  ✓ Plotted well %s', wellID);
         if ~isempty(iv1Fit)

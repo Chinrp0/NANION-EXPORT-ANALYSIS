@@ -40,21 +40,44 @@ classdef NanionBoltzmannFitter < handle
                 dataType = 'conductance';
                 dataUnits = 'nS';
                 obj.logger.logInfo('Using conductance (nS) for activation protocol');
-                
-            else % inactivation
-                % CRITICAL: Check if we should normalize inactivation data
-                iv1Data = filteredData.measurements.iv1.inactivationData;
-                if isfield(filteredData.measurements, 'iv2')
-                    iv2Data = filteredData.measurements.iv2.inactivationData;
-                else
-                    iv2Data = [];
+            
+                else % inactivation
+                    % Normalize inactivation data for fitting
+                    iv1_inact_raw = filteredData.measurements.iv1.inactivationData;
+                    
+                    % Normalize each well by its own minimum (most negative = maximum absolute current)
+                    numWells = size(iv1_inact_raw, 1);
+                    iv1Data = zeros(size(iv1_inact_raw));
+                    for i = 1:numWells
+                        wellMin = min(iv1_inact_raw(i, :));
+                        if wellMin ~= 0
+                            iv1Data(i, :) = iv1_inact_raw(i, :) / wellMin;
+                        else
+                            iv1Data(i, :) = iv1_inact_raw(i, :);
+                        end
+                    end
+                    
+                    % Normalize IV2 if available
+                    if isfield(filteredData.measurements, 'iv2')
+                        iv2_inact_raw = filteredData.measurements.iv2.inactivationData;
+                        iv2Data = zeros(size(iv2_inact_raw));
+                        for i = 1:numWells
+                            wellMin = min(iv2_inact_raw(i, :));
+                            if wellMin ~= 0
+                                iv2Data(i, :) = iv2_inact_raw(i, :) / wellMin;
+                            else
+                                iv2Data(i, :) = iv2_inact_raw(i, :);
+                            end
+                        end
+                    else
+                        iv2Data = [];
+                    end
+                    
+                    dataType = 'normalized_inactivation';
+                    dataUnits = '0-1';
+                    obj.logger.logInfo('Normalized inactivation data for Boltzmann fitting');
                 end
-                
-                dataType = 'current';
-                dataUnits = 'pA';
-                obj.logger.logInfo('Using current (pA) for inactivation protocol');
-                obj.logger.logWarning('⚠ Inactivation data NOT normalized - may cause fitting issues!');
-            end
+
             
             % Initialize wells array
             wells(numWells) = struct(...
@@ -119,8 +142,27 @@ classdef NanionBoltzmannFitter < handle
             
             try
                 % Get initial parameters and bounds
-                [startPoints, lowerBounds, upperBounds] = BoltzmannModel.getInitialParams(...
-                    V_valid, D_valid, protocolType, obj.config);
+                % For normalized inactivation, adjust bounds to 0-1 range
+                if strcmp(protocolType, 'inactivation') && max(D_valid) <= 1.5 && min(D_valid) >= -0.5
+                    % Data appears to be normalized (0-1 range)
+                    [startPoints, lowerBounds, upperBounds] = BoltzmannModel.getInitialParams(...
+                        V_valid, D_valid, protocolType, obj.config);
+                    
+                    % Override V_min and V_max bounds for normalized data
+                    lowerBounds(1) = 0.0;      % V_min lower bound
+                    upperBounds(1) = 0.2;      % V_min upper bound
+                    lowerBounds(2) = 0.8;      % V_max lower bound
+                    upperBounds(2) = 1.2;      % V_max upper bound
+                    
+                    % Adjust start points for normalized data
+                    startPoints(1) = 0.0;      % V_min start
+                    startPoints(2) = 1.0;      % V_max start
+                    
+                    obj.logger.logDebug('Using normalized data bounds (0-1) for inactivation fitting');
+                else
+                    [startPoints, lowerBounds, upperBounds] = BoltzmannModel.getInitialParams(...
+                        V_valid, D_valid, protocolType, obj.config);
+                end
                 
                 % DEBUG: Log fitting setup
                 obj.logger.logDebug(sprintf('Fitting setup: V range [%.1f, %.1f], Data range [%.3e, %.3e]', ...
@@ -301,8 +343,22 @@ classdef NanionBoltzmannFitter < handle
             end
             
             try
-                [startPoints, lowerBounds, upperBounds] = BoltzmannModel.getInitialParams(...
-                    V_valid, D_valid, protocolType, config);
+                % Get initial parameters and bounds
+                if strcmp(protocolType, 'inactivation') && max(D_valid) <= 1.5 && min(D_valid) >= -0.5
+                    [startPoints, lowerBounds, upperBounds] = BoltzmannModel.getInitialParams(...
+                        V_valid, D_valid, protocolType, config);
+                    
+                    % Override for normalized data
+                    lowerBounds(1) = 0.0;
+                    upperBounds(1) = 0.2;
+                    lowerBounds(2) = 0.8;
+                    upperBounds(2) = 1.2;
+                    startPoints(1) = 0.0;
+                    startPoints(2) = 1.0;
+                else
+                    [startPoints, lowerBounds, upperBounds] = BoltzmannModel.getInitialParams(...
+                        V_valid, D_valid, protocolType, config);
+                end
                 
                 ft = BoltzmannModel.createFitType(protocolType);
                 
