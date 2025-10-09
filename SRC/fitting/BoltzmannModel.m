@@ -97,11 +97,28 @@ classdef BoltzmannModel
             upperBounds = [V_min_upper, V_max_upper, V_mid_upper, k_upper];
         end
         
-        function y = evaluateBoltzmann(V, V_min, V_max, V_mid, k)
+        function y = evaluateBoltzmann(V, V_min, V_max, V_mid, k, protocolType)
             %EVALUATEBOLTZMANN Evaluate Boltzmann equation at voltage points
-            %   y = V_min + (V_max - V_min) / (1 + exp((V_mid - V) / k))
+            %   Different signs for activation vs inactivation
+            %
+            % Inputs:
+            %   V - Voltage array [1×N]
+            %   V_min - Minimum asymptote
+            %   V_max - Maximum asymptote
+            %   V_mid - Half-maximal voltage
+            %   k - Slope factor
+            %   protocolType - 'activation' or 'inactivation'
+            %
+            % Output:
+            %   y - Evaluated curve [1×N]
             
-            y = V_min + (V_max - V_min) ./ (1 + exp((V_mid - V) / k));
+            if strcmp(protocolType, 'activation')
+                % Activation: sigmoid rises left to right
+                y = V_min + (V_max - V_min) ./ (1 + exp((V_mid - V) / k));
+            else
+                % Inactivation: sigmoid falls left to right
+                y = V_min + (V_max - V_min) ./ (1 + exp((V - V_mid) / k));
+            end
         end
         
         function z_a = calculateGatingCharge(k, temperature)

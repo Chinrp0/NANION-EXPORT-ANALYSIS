@@ -213,7 +213,7 @@ classdef NanionBoltzmannFitter < handle
                 
                 % Generate fitted curve by evaluating Boltzmann at all voltage points
                 fittedCurve = BoltzmannModel.evaluateBoltzmann(...
-                    voltages, fitresult.V_min, fitresult.V_max, fitresult.V_mid, fitresult.k);
+                    voltages, fitresult.V_min, fitresult.V_max, fitresult.V_mid, fitresult.k, protocolType);
                 
                 % Assess fit quality
                 quality = FitQualityAssessor.assessQuality(fitParams, gof, protocolType, obj.config);
@@ -549,7 +549,7 @@ classdef NanionBoltzmannFitter < handle
                 
                 % Generate fitted curve
                 fittedCurve = BoltzmannModel.evaluateBoltzmann(...
-                    voltages, fitresult.V_min, fitresult.V_max, fitresult.V_mid, fitresult.k);
+                    voltages, fitresult.V_min, fitresult.V_max, fitresult.V_mid, fitresult.k, protocolType);
                 
                 quality = FitQualityAssessor.assessQuality(fitParams, gof, protocolType, config);
                 
