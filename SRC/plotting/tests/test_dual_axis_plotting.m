@@ -170,8 +170,7 @@ function test_dual_axis_plotting()
             end
             
             % Generate inactivation plot
-            plotter.plotInactivationDualPanel(wellID, protocolInfo.voltages, ...
-                iv1Data, iv2Data, iv1Fit, iv2Fit);
+            plotter.plotInactivationDualAxis(wellID, protocolInfo.voltages, iv1Data, iv2Data, iv1Fit, iv2Fit);
         end
         
         fprintf('  ✓ Plotted well %s', wellID);

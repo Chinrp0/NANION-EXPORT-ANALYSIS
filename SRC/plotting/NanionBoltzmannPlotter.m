@@ -150,13 +150,13 @@ classdef NanionBoltzmannPlotter < handle
             obj.logger.logInfo(sprintf('Plotted dual-axis activation for well %s', wellID));
         end
         
-        function plotInactivationDualPanel(obj, wellID, voltages, iv1Data, iv2Data, iv1Fit, iv2Fit)
-            %PLOTINACTIVATIONDUALPANEL Two-panel plot for inactivation protocols
-            %   Top panel: Normalized inactivation with Boltzmann fits
-            %   Bottom panel: Test pulse current (activationData field)
+        function plotInactivationDualAxis(obj, wellID, voltages, iv1Data, iv2Data, iv1Fit, iv2Fit)
+            %PLOTINACTIVATIONDUALAXIS Single plot with dual y-axis for inactivation
+            %   Left axis: Normalized inactivation (0-1) with Boltzmann fits
+            %   Right axis: Test pulse current (pA)
             
             figure('Name', sprintf('Well %s - Inactivation', wellID), ...
-                   'Position', [100, 100, 1000, 750], ...
+                   'Position', [100, 100, 1000, 650], ...
                    'Color', 'white');
             
             markerSize = 5;
@@ -164,12 +164,11 @@ classdef NanionBoltzmannPlotter < handle
             fitLineWidth = 2.5;
             markerAlpha = 0.85;
             
-            %% TOP PANEL: Normalized Inactivation
-            % Use position: [left, bottom, width, height]
-            subplot('Position', [0.10, 0.55, 0.85, 0.38]);
+            %% LEFT Y-AXIS: Normalized Inactivation
+            yyaxis left
             hold on;
             
-            % IV1 Normalized Inactivation (circles, filled, black)
+            % IV1 Normalized Inactivation (black circles, filled)
             iv1_norm = iv1Data.inactivationData / min(iv1Data.inactivationData);
             h1_inact = plot(voltages, iv1_norm, '-o', ...
                 'Color', obj.colors.iv1, ...
@@ -179,7 +178,7 @@ classdef NanionBoltzmannPlotter < handle
                 'DisplayName', 'IV1 Inactivation');
             h1_inact.Color(4) = markerAlpha;
             
-            % IV1 Fit
+            % IV1 Boltzmann Fit
             if ~isempty(iv1Fit) && isfield(iv1Fit, 'fittedCurve')
                 plot(voltages, iv1Fit.fittedCurve, '--', ...
                     'Color', obj.colors.iv1, ...
@@ -188,7 +187,7 @@ classdef NanionBoltzmannPlotter < handle
                         iv1Fit.params.V_mid, iv1Fit.params.k));
             end
             
-            % IV2 Normalized Inactivation (circles, filled, blue)
+            % IV2 Normalized Inactivation (blue circles, filled)
             if ~isempty(iv2Data)
                 iv2_norm = iv2Data.inactivationData / min(iv2Data.inactivationData);
                 h2_inact = plot(voltages, iv2_norm, '-o', ...
@@ -199,7 +198,7 @@ classdef NanionBoltzmannPlotter < handle
                     'DisplayName', 'IV2 Inactivation');
                 h2_inact.Color(4) = markerAlpha;
                 
-                % IV2 Fit
+                % IV2 Boltzmann Fit
                 if ~isempty(iv2Fit) && isfield(iv2Fit, 'fittedCurve')
                     plot(voltages, iv2Fit.fittedCurve, '--', ...
                         'Color', obj.colors.iv2, ...
@@ -210,57 +209,68 @@ classdef NanionBoltzmannPlotter < handle
             end
             
             ylabel('Normalized Inactivation (0-1)', 'FontSize', 12, 'FontWeight', 'bold');
-            xlabel('Conditioning Voltage (mV)', 'FontSize', 12, 'FontWeight', 'bold');
-            title(sprintf('Well %s: Inactivation Protocol', wellID), ...
-                'FontSize', 14, 'FontWeight', 'bold');
-            grid on;
-            ax1 = gca;
-            ax1.GridAlpha = 0.15;
-            ax1.Box = 'on';
-            ax1.LineWidth = 1.2;
-            legend('Location', 'best', 'FontSize', 9, 'Box', 'off');
+            ax = gca;
+            ax.YColor = [0, 0, 0];
             ylim([0, 1.1]);
-            xlim([min(voltages) - 5, max(voltages) + 5]);
-            hold off;
             
-            %% BOTTOM PANEL: Test Pulse Current
-            % Use position: [left, bottom, width, height]
-            subplot('Position', [0.10, 0.08, 0.85, 0.38]);
+            %% RIGHT Y-AXIS: Test Pulse Current
+            yyaxis right
             hold on;
             
-            % IV1 Test Pulse Current (circles, filled, black)
-            h1_test = plot(voltages, iv1Data.activationData, '-o', ...
-                'Color', obj.colors.iv1, ...
+            % IV1 Test Current (gray squares, hollow)
+            h1_test = plot(voltages, iv1Data.activationData, '-s', ...
+                'Color', obj.colors.iv1_current, ...
                 'MarkerSize', markerSize, ...
-                'MarkerFaceColor', obj.colors.iv1, ...
+                'MarkerFaceColor', 'none', ...
                 'LineWidth', lineWidth, ...
                 'DisplayName', 'IV1 Test Current');
             h1_test.Color(4) = markerAlpha;
             
-            % IV2 Test Pulse Current (circles, filled, blue)
+            % IV2 Test Current (light blue squares, hollow)
             if ~isempty(iv2Data)
-                h2_test = plot(voltages, iv2Data.activationData, '-o', ...
-                    'Color', obj.colors.iv2, ...
+                h2_test = plot(voltages, iv2Data.activationData, '-s', ...
+                    'Color', obj.colors.iv2_current, ...
                     'MarkerSize', markerSize, ...
-                    'MarkerFaceColor', obj.colors.iv2, ...
+                    'MarkerFaceColor', 'none', ...
                     'LineWidth', lineWidth, ...
                     'DisplayName', 'IV2 Test Current');
                 h2_test.Color(4) = markerAlpha;
             end
             
             ylabel('Test Pulse Current (pA)', 'FontSize', 12, 'FontWeight', 'bold');
+            ax = gca;
+            ax.YColor = [0, 0, 0];
+            
+            % Auto-scale right axis appropriately
+            ylim_right = ylim;
+            if ylim_right(1) < 0
+                ylim([ylim_right(1) * 1.1, max(ylim_right(2), 100)]);
+            end
+            
+            %% X-AXIS and FORMATTING
             xlabel('Conditioning Voltage (mV)', 'FontSize', 12, 'FontWeight', 'bold');
-            title('Test Pulse Current vs Conditioning Voltage', 'FontSize', 12);
-            grid on;
-            ax2 = gca;
-            ax2.GridAlpha = 0.15;
-            ax2.Box = 'on';
-            ax2.LineWidth = 1.2;
-            legend('Location', 'best', 'FontSize', 9, 'Box', 'off');
             xlim([min(voltages) - 5, max(voltages) + 5]);
+            
+            % Title
+            titleStr = sprintf('Well %s: Inactivation Protocol', wellID);
+            if ~isempty(iv1Fit)
+                titleStr = sprintf('%s (IV1: R^2=%.3f)', titleStr, iv1Fit.quality.rsquared);
+            end
+            title(titleStr, 'FontSize', 14, 'FontWeight', 'bold');
+            
+            % Grid and legend
+            grid on;
+            ax = gca;
+            ax.GridAlpha = 0.15;
+            ax.GridLineStyle = '-';
+            ax.Box = 'on';
+            ax.LineWidth = 1.2;
+            
+            legend('Location', 'best', 'FontSize', 9, 'Box', 'off', 'NumColumns', 2);
+            
             hold off;
             
-            obj.logger.logInfo(sprintf('Plotted dual-panel inactivation for well %s', wellID));
+            obj.logger.logInfo(sprintf('Plotted dual-axis inactivation for well %s', wellID));
         end
         
         function plotBatch(obj, wellIDs, voltages, measurements, fitResults, protocolType)
