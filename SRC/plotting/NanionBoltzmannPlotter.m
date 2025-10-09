@@ -16,10 +16,12 @@ classdef NanionBoltzmannPlotter < handle
             obj.config = config;
             obj.logger = logger;
             
-            % Define color scheme (consistent per IV)
+            % Define color scheme
             obj.colors = struct(...
-                'iv1', [0.00, 0.45, 0.74], ...  % Blue
-                'iv2', [0.85, 0.33, 0.10]);     % Orange/Red
+                'iv1', [0.0, 0.0, 0.0], ...           % Black (conductance)
+                'iv1_current', [0.5, 0.5, 0.5], ...   % Gray (current)
+                'iv2', [0.0, 0.45, 0.74], ...         % Blue (conductance)
+                'iv2_current', [0.4, 0.7, 1.0]);      % Light blue (current)
         end
         
         function plotActivationDualAxis(obj, wellID, voltages, iv1Data, iv2Data, iv1Fit, iv2Fit)
@@ -29,24 +31,27 @@ classdef NanionBoltzmannPlotter < handle
             %   Plots both IV1 and IV2 with connected lines
             
             figure('Name', sprintf('Well %s - Activation', wellID), ...
-                   'Position', [100, 100, 900, 600]);
+                   'Position', [100, 100, 1000, 650], ...
+                   'Color', 'white');
             
             % Marker and line settings
-            markerSize = 4;
-            lineWidth = 1.5;
-            fitLineWidth = 2.0;
+            markerSize = 5;           % Smaller markers
+            lineWidth = 1.8;          % Slightly thicker lines
+            fitLineWidth = 2.5;       % Thicker fit lines
+            markerAlpha = 0.85;       % Slight transparency for overlapping points
             
             %% LEFT Y-AXIS: Conductance (nS)
             yyaxis left
             hold on;
             
-            % IV1 Conductance data (circles, filled)
-            plot(voltages, iv1Data.conductance, '-o', ...
+            % IV1 Conductance data (circles, filled, black)
+            h1_cond = plot(voltages, iv1Data.conductance, '-o', ...
                 'Color', obj.colors.iv1, ...
                 'MarkerSize', markerSize, ...
                 'MarkerFaceColor', obj.colors.iv1, ...
                 'LineWidth', lineWidth, ...
                 'DisplayName', 'IV1 Conductance');
+            h1_cond.Color(4) = markerAlpha;  % Set transparency
             
             % IV1 Boltzmann fit
             if ~isempty(iv1Fit) && isfield(iv1Fit, 'fittedCurve')
@@ -57,14 +62,15 @@ classdef NanionBoltzmannPlotter < handle
                         iv1Fit.params.V_mid, iv1Fit.params.k));
             end
             
-            % IV2 Conductance data (circles, filled)
+            % IV2 Conductance data (circles, filled, blue)
             if ~isempty(iv2Data)
-                plot(voltages, iv2Data.conductance, '-o', ...
+                h2_cond = plot(voltages, iv2Data.conductance, '-o', ...
                     'Color', obj.colors.iv2, ...
                     'MarkerSize', markerSize, ...
                     'MarkerFaceColor', obj.colors.iv2, ...
                     'LineWidth', lineWidth, ...
                     'DisplayName', 'IV2 Conductance');
+                h2_cond.Color(4) = markerAlpha;  % Set transparency
                 
                 % IV2 Boltzmann fit
                 if ~isempty(iv2Fit) && isfield(iv2Fit, 'fittedCurve')
@@ -86,22 +92,24 @@ classdef NanionBoltzmannPlotter < handle
             yyaxis right
             hold on;
             
-            % IV1 Peak Current (squares, hollow)
-            plot(voltages, iv1Data.peakCurrent, '-s', ...
-                'Color', obj.colors.iv1, ...
+            % IV1 Peak Current (gray squares, hollow)
+            h1_current = plot(voltages, iv1Data.peakCurrent, '-s', ...
+                'Color', obj.colors.iv1_current, ...
                 'MarkerSize', markerSize, ...
                 'MarkerFaceColor', 'none', ...
                 'LineWidth', lineWidth, ...
                 'DisplayName', 'IV1 Current');
+            h1_current.Color(4) = markerAlpha;  % Set transparency
             
-            % IV2 Peak Current (squares, hollow)
+            % IV2 Peak Current (light blue squares, hollow)
             if ~isempty(iv2Data)
-                plot(voltages, iv2Data.peakCurrent, '-s', ...
-                    'Color', obj.colors.iv2, ...
+                h2_current = plot(voltages, iv2Data.peakCurrent, '-s', ...
+                    'Color', obj.colors.iv2_current, ...
                     'MarkerSize', markerSize, ...
                     'MarkerFaceColor', 'none', ...
                     'LineWidth', lineWidth, ...
                     'DisplayName', 'IV2 Current');
+                h2_current.Color(4) = markerAlpha;  % Set transparency
             end
             
             ylabel('Peak Current (pA)', 'FontSize', 12, 'FontWeight', 'bold');
@@ -127,7 +135,15 @@ classdef NanionBoltzmannPlotter < handle
             
             % Grid and legend
             grid on;
-            legend('Location', 'best', 'FontSize', 9);
+            ax = gca;
+            ax.GridAlpha = 0.15;  % Subtle grid
+            ax.GridLineStyle = '-';
+            ax.MinorGridAlpha = 0.05;
+            ax.Box = 'on';
+            ax.LineWidth = 1.2;
+            
+            legend('Location', 'best', 'FontSize', 9, 'Box', 'off', ...
+                'NumColumns', 2);  % Two-column legend to save space
             
             hold off;
             
@@ -140,24 +156,27 @@ classdef NanionBoltzmannPlotter < handle
             %   Bottom panel: Test pulse current (activationData field)
             
             figure('Name', sprintf('Well %s - Inactivation', wellID), ...
-                   'Position', [100, 100, 900, 700]);
+                   'Position', [100, 100, 1000, 750], ...
+                   'Color', 'white');
             
-            markerSize = 4;
-            lineWidth = 1.5;
-            fitLineWidth = 2.0;
+            markerSize = 5;
+            lineWidth = 1.8;
+            fitLineWidth = 2.5;
+            markerAlpha = 0.85;
             
             %% TOP PANEL: Normalized Inactivation
             subplot(2, 1, 1);
             hold on;
             
-            % IV1 Normalized Inactivation (circles, filled)
+            % IV1 Normalized Inactivation (circles, filled, black)
             iv1_norm = iv1Data.inactivationData / min(iv1Data.inactivationData);
-            plot(voltages, iv1_norm, '-o', ...
+            h1_inact = plot(voltages, iv1_norm, '-o', ...
                 'Color', obj.colors.iv1, ...
                 'MarkerSize', markerSize, ...
                 'MarkerFaceColor', obj.colors.iv1, ...
                 'LineWidth', lineWidth, ...
                 'DisplayName', 'IV1 Inactivation');
+            h1_inact.Color(4) = markerAlpha;
             
             % IV1 Fit
             if ~isempty(iv1Fit) && isfield(iv1Fit, 'fittedCurve')
@@ -168,15 +187,16 @@ classdef NanionBoltzmannPlotter < handle
                         iv1Fit.params.V_mid, iv1Fit.params.k));
             end
             
-            % IV2 Normalized Inactivation (circles, filled)
+            % IV2 Normalized Inactivation (circles, filled, blue)
             if ~isempty(iv2Data)
                 iv2_norm = iv2Data.inactivationData / min(iv2Data.inactivationData);
-                plot(voltages, iv2_norm, '-o', ...
+                h2_inact = plot(voltages, iv2_norm, '-o', ...
                     'Color', obj.colors.iv2, ...
                     'MarkerSize', markerSize, ...
                     'MarkerFaceColor', obj.colors.iv2, ...
                     'LineWidth', lineWidth, ...
                     'DisplayName', 'IV2 Inactivation');
+                h2_inact.Color(4) = markerAlpha;
                 
                 % IV2 Fit
                 if ~isempty(iv2Fit) && isfield(iv2Fit, 'fittedCurve')
@@ -193,7 +213,11 @@ classdef NanionBoltzmannPlotter < handle
             title(sprintf('Well %s: Inactivation Protocol', wellID), ...
                 'FontSize', 14, 'FontWeight', 'bold');
             grid on;
-            legend('Location', 'best', 'FontSize', 9);
+            ax1 = gca;
+            ax1.GridAlpha = 0.15;
+            ax1.Box = 'on';
+            ax1.LineWidth = 1.2;
+            legend('Location', 'best', 'FontSize', 9, 'Box', 'off');
             ylim([0, 1.1]);
             xlim([min(voltages) - 5, max(voltages) + 5]);
             hold off;
@@ -202,29 +226,35 @@ classdef NanionBoltzmannPlotter < handle
             subplot(2, 1, 2);
             hold on;
             
-            % IV1 Test Pulse Current (circles, filled)
-            plot(voltages, iv1Data.activationData, '-o', ...
+            % IV1 Test Pulse Current (circles, filled, black)
+            h1_test = plot(voltages, iv1Data.activationData, '-o', ...
                 'Color', obj.colors.iv1, ...
                 'MarkerSize', markerSize, ...
                 'MarkerFaceColor', obj.colors.iv1, ...
                 'LineWidth', lineWidth, ...
                 'DisplayName', 'IV1 Test Current');
+            h1_test.Color(4) = markerAlpha;
             
-            % IV2 Test Pulse Current (circles, filled)
+            % IV2 Test Pulse Current (circles, filled, blue)
             if ~isempty(iv2Data)
-                plot(voltages, iv2Data.activationData, '-o', ...
+                h2_test = plot(voltages, iv2Data.activationData, '-o', ...
                     'Color', obj.colors.iv2, ...
                     'MarkerSize', markerSize, ...
                     'MarkerFaceColor', obj.colors.iv2, ...
                     'LineWidth', lineWidth, ...
                     'DisplayName', 'IV2 Test Current');
+                h2_test.Color(4) = markerAlpha;
             end
             
             ylabel('Test Pulse Current (pA)', 'FontSize', 12, 'FontWeight', 'bold');
             xlabel('Conditioning Voltage (mV)', 'FontSize', 12, 'FontWeight', 'bold');
             title('Test Pulse Current vs Conditioning Voltage', 'FontSize', 12);
             grid on;
-            legend('Location', 'best', 'FontSize', 9);
+            ax2 = gca;
+            ax2.GridAlpha = 0.15;
+            ax2.Box = 'on';
+            ax2.LineWidth = 1.2;
+            legend('Location', 'best', 'FontSize', 9, 'Box', 'off');
             xlim([min(voltages) - 5, max(voltages) + 5]);
             hold off;
             

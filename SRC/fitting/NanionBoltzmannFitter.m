@@ -138,12 +138,7 @@ classdef NanionBoltzmannFitter < handle
                     'Upper', upperBounds);
                 
                 % Get temperature
-                if isfield(obj.config.configData.analysis, 'temperature')
-                    temperature = obj.config.configData.analysis.temperature;
-                else
-                    temperature = 25;
-                    obj.logger.logWarning('Temperature not in config, using default 25°C');
-                end
+                temperature = obj.config.temperature;  % Uses public Dependent property
                 
                 % Extract parameters
                 fitParams = struct(...
@@ -316,11 +311,7 @@ classdef NanionBoltzmannFitter < handle
                     'Lower', lowerBounds, ...
                     'Upper', upperBounds);
                 
-                if isfield(config.configData.analysis, 'temperature')
-                    temperature = config.configData.analysis.temperature;
-                else
-                    temperature = 25;
-                end
+                temperature = config.temperature;  % Uses public Dependent property
                 
                 fitParams = struct(...
                     'V_min', fitresult.V_min, ...
