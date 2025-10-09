@@ -160,22 +160,30 @@ classdef NanionDataExtractor < handle
     end
     
     methods (Access = private)
-        function wellIDs = extractWellIDs(obj, dataTable, dataStartRow)
+        function wellIDs = extractWellIDs(obj, dataTable, ~)
             %EXTRACTWELLIDS Extract Well_ID values from first column
+            %   FIXED: dataTable is already sliced, so start from row 1
+            %   Note: Third parameter (dataStartRow) is ignored but kept for compatibility
             
-            wellColumn = dataTable{dataStartRow:end, 1};
+            % dataTable is already positioned at the data rows (no headers)
+            % Extract ALL rows from column 1
+            wellColumn = dataTable{:, 1};
             wellIDs = string(wellColumn);
             
+            % Filter out empty/missing well IDs
             validMask = ~ismissing(wellIDs) & wellIDs ~= "";
             wellIDs = wellIDs(validMask);
             
             obj.logger.logInfo(sprintf('Extracted %d well IDs', length(wellIDs)));
         end
         
-        function measurements = extractByProtocol(obj, dataTable, protocolInfo, dataStartRow)
+        function measurements = extractByProtocol(obj, dataTable, protocolInfo, ~)
             %EXTRACTBYPROTOCOL Extract ALL sweep measurements by protocol type
+            %   FIXED: dataTable is already sliced, so use it directly
+            %   Note: Fourth parameter (dataStartRow) is ignored but kept for compatibility
             
-            dataRows = dataTable(dataStartRow:end, :);
+            % dataTable is already positioned at the data section (no double-slicing)
+            dataRows = dataTable;  % Use the table as-is
             
             switch protocolInfo.type
                 case 'activation'

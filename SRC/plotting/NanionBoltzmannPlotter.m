@@ -1,319 +1,296 @@
 classdef NanionBoltzmannPlotter < handle
-    %NANIONBOLTZMANNPLOTTER Visualization for Boltzmann fitting results
-    %   Creates publication-quality plots of I-V curves and parameter distributions
+    %NANIONBOLTZMANNPLOTTER Dual y-axis plotting for activation protocols
+    %   Left axis: Conductance (nS)
+    %   Right axis: Peak Current (pA)
+    %   Plots IV1 and IV2 with Boltzmann fits
     
     properties (Access = private)
         config
         logger
-        colorMap
+        colors
     end
     
     methods
         function obj = NanionBoltzmannPlotter(config, logger)
             %NANIONBOLTZMANNPLOTTER Constructor
-            
             obj.config = config;
             obj.logger = logger;
             
-            % Define quality color scheme
-            obj.colorMap = struct(...
-                'Good', [0.2, 0.7, 0.3], ...       % Green
-                'Acceptable', [0.2, 0.4, 0.8], ... % Blue
-                'Poor', [0.9, 0.5, 0.2], ...       % Orange
-                'Failed', [0.8, 0.2, 0.2]);        % Red
+            % Define color scheme (consistent per IV)
+            obj.colors = struct(...
+                'iv1', [0.00, 0.45, 0.74], ...  % Blue
+                'iv2', [0.85, 0.33, 0.10]);     % Orange/Red
         end
         
-        function plotAllResults(obj, fittedData, outputDir, fileName)
-            %PLOTALLRESULTS Generate all visualization plots
+        function plotActivationDualAxis(obj, wellID, voltages, iv1Data, iv2Data, iv1Fit, iv2Fit)
+            %PLOTACTIVATIONDUALAXIS Dual y-axis plot for activation protocols
+            %   Left axis: Conductance with Boltzmann fits
+            %   Right axis: Peak Current
+            %   Plots both IV1 and IV2 with connected lines
             
-            obj.logger.logInfo('Generating Boltzmann fit visualizations...');
+            figure('Name', sprintf('Well %s - Activation', wellID), ...
+                   'Position', [100, 100, 900, 600]);
             
-            if ~exist(outputDir, 'dir')
-                mkdir(outputDir);
-            end
+            % Marker and line settings
+            markerSize = 4;
+            lineWidth = 1.5;
+            fitLineWidth = 2.0;
             
-            % 1. Individual I-V curves with fits (multi-panel)
-            obj.plotIVCurvesGrid(fittedData, outputDir, fileName);
-            
-            % 2. Parameter distributions
-            obj.plotParameterDistributions(fittedData, outputDir, fileName);
-            
-            % 3. Fit quality summary
-            obj.plotFitQualitySummary(fittedData, outputDir, fileName);
-            
-            % 4. V_mid vs R² scatter plot
-            obj.plotVmidVsR2(fittedData, outputDir, fileName);
-            
-            obj.logger.logInfo(sprintf('✓ Plots saved to: %s', outputDir));
-        end
-        
-        function plotIVCurvesGrid(obj, fittedData, outputDir, fileName)
-            %PLOTIVCURVESGRID Plot I-V curves in grid layout
-            
-            wells = fittedData.wells;
-            numWells = length(wells);
-            
-            % Grid layout
-            rowsPerFig = obj.config.plotting.rowsPerFigure;
-            colsPerFig = obj.config.plotting.colsPerFigure;
-            wellsPerFig = rowsPerFig * colsPerFig;
-            numFigures = ceil(numWells / wellsPerFig);
-            
-            obj.logger.logInfo(sprintf('Plotting %d wells in %d figures (%dx%d grid)', ...
-                numWells, numFigures, rowsPerFig, colsPerFig));
-            
-            for figIdx = 1:numFigures
-                fig = figure('Position', [100, 100, obj.config.plotting.figureSize]);
-                fig.Color = 'white';
-                
-                startIdx = (figIdx - 1) * wellsPerFig + 1;
-                endIdx = min(figIdx * wellsPerFig, numWells);
-                
-                for wellIdx = startIdx:endIdx
-                    subplot(rowsPerFig, colsPerFig, wellIdx - startIdx + 1);
-                    obj.plotSingleIVCurve(wells(wellIdx));
-                end
-                
-                % Save figure
-                sgtitle(sprintf('%s - Boltzmann Fits (Page %d/%d)', ...
-                    fileName, figIdx, numFigures), ...
-                    'Interpreter', 'none', 'FontSize', 14, 'FontWeight', 'bold');
-                
-                figName = fullfile(outputDir, sprintf('%s_IVcurves_page%d.png', fileName, figIdx));
-                saveas(fig, figName);
-                close(fig);
-                
-                obj.logger.logInfo(sprintf('Saved I-V curves page %d/%d', figIdx, numFigures));
-            end
-        end
-        
-        function plotSingleIVCurve(obj, well)
-            %PLOTSINGLEIVCURVE Plot single well I-V or G-V curve with fit
-            
-            V = well.voltages;
-            D = well.data;  % Conductance (nS) or Current (pA)
-            validIdx = ~isnan(D);
-            
-            % Plot data points
+            %% LEFT Y-AXIS: Conductance (nS)
+            yyaxis left
             hold on;
-            plot(V(validIdx), D(validIdx), 'o', ...
-                'Color', obj.colorMap.(well.fitQuality), ...
-                'MarkerSize', obj.config.plotting.markerSize, ...
-                'MarkerFaceColor', obj.colorMap.(well.fitQuality));
             
-            % Plot fit line if converged
-            if well.fitParams.converged
-                V_fit = linspace(min(V), max(V), 100);
+            % IV1 Conductance data (circles, filled)
+            plot(voltages, iv1Data.conductance, '-o', ...
+                'Color', obj.colors.iv1, ...
+                'MarkerSize', markerSize, ...
+                'MarkerFaceColor', obj.colors.iv1, ...
+                'LineWidth', lineWidth, ...
+                'DisplayName', 'IV1 Conductance');
+            
+            % IV1 Boltzmann fit
+            if ~isempty(iv1Fit) && isfield(iv1Fit, 'fittedCurve')
+                plot(voltages, iv1Fit.fittedCurve, '--', ...
+                    'Color', obj.colors.iv1, ...
+                    'LineWidth', fitLineWidth, ...
+                    'DisplayName', sprintf('IV1 Fit (V_{1/2}=%.1f, k=%.1f)', ...
+                        iv1Fit.params.V_mid, iv1Fit.params.k));
+            end
+            
+            % IV2 Conductance data (circles, filled)
+            if ~isempty(iv2Data)
+                plot(voltages, iv2Data.conductance, '-o', ...
+                    'Color', obj.colors.iv2, ...
+                    'MarkerSize', markerSize, ...
+                    'MarkerFaceColor', obj.colors.iv2, ...
+                    'LineWidth', lineWidth, ...
+                    'DisplayName', 'IV2 Conductance');
                 
-                if strcmp(well.protocol, 'activation')
-                    D_fit = BoltzmannModel.activation(V_fit, ...
-                        well.fitParams.V_min, well.fitParams.V_max, ...
-                        well.fitParams.V_mid, well.fitParams.k);
+                % IV2 Boltzmann fit
+                if ~isempty(iv2Fit) && isfield(iv2Fit, 'fittedCurve')
+                    plot(voltages, iv2Fit.fittedCurve, '--', ...
+                        'Color', obj.colors.iv2, ...
+                        'LineWidth', fitLineWidth, ...
+                        'DisplayName', sprintf('IV2 Fit (V_{1/2}=%.1f, k=%.1f)', ...
+                            iv2Fit.params.V_mid, iv2Fit.params.k));
+                end
+            end
+            
+            ylabel('Conductance (nS)', 'FontSize', 12, 'FontWeight', 'bold');
+            ax = gca;
+            ax.YColor = [0, 0, 0];  % Black for left axis
+            ylim_left = ylim;
+            ylim([0, ylim_left(2) * 1.1]);  % Start at 0, add 10% headroom
+            
+            %% RIGHT Y-AXIS: Peak Current (pA)
+            yyaxis right
+            hold on;
+            
+            % IV1 Peak Current (squares, hollow)
+            plot(voltages, iv1Data.peakCurrent, '-s', ...
+                'Color', obj.colors.iv1, ...
+                'MarkerSize', markerSize, ...
+                'MarkerFaceColor', 'none', ...
+                'LineWidth', lineWidth, ...
+                'DisplayName', 'IV1 Current');
+            
+            % IV2 Peak Current (squares, hollow)
+            if ~isempty(iv2Data)
+                plot(voltages, iv2Data.peakCurrent, '-s', ...
+                    'Color', obj.colors.iv2, ...
+                    'MarkerSize', markerSize, ...
+                    'MarkerFaceColor', 'none', ...
+                    'LineWidth', lineWidth, ...
+                    'DisplayName', 'IV2 Current');
+            end
+            
+            ylabel('Peak Current (pA)', 'FontSize', 12, 'FontWeight', 'bold');
+            ax = gca;
+            ax.YColor = [0, 0, 0];  % Black for right axis
+            
+            % Set y-limits to show negative current clearly
+            ylim_right = ylim;
+            ylim([ylim_right(1) * 1.1, 0]);  % Extend negative, cap at 0
+            
+            %% X-AXIS and FORMATTING
+            xlabel('Voltage (mV)', 'FontSize', 12, 'FontWeight', 'bold');
+            xlim([min(voltages) - 5, max(voltages) + 5]);
+            
+            % Title with fit quality
+            if ~isempty(iv1Fit)
+                titleStr = sprintf('Well %s: Activation Protocol (IV1: R^2=%.3f)', ...
+                    wellID, iv1Fit.quality.rsquared);
+            else
+                titleStr = sprintf('Well %s: Activation Protocol', wellID);
+            end
+            title(titleStr, 'FontSize', 14, 'FontWeight', 'bold');
+            
+            % Grid and legend
+            grid on;
+            legend('Location', 'best', 'FontSize', 9);
+            
+            hold off;
+            
+            obj.logger.logInfo(sprintf('Plotted dual-axis activation for well %s', wellID));
+        end
+        
+        function plotInactivationDualPanel(obj, wellID, voltages, iv1Data, iv2Data, iv1Fit, iv2Fit)
+            %PLOTINACTIVATIONDUALPANEL Two-panel plot for inactivation protocols
+            %   Top panel: Normalized inactivation with Boltzmann fits
+            %   Bottom panel: Test pulse current (activationData field)
+            
+            figure('Name', sprintf('Well %s - Inactivation', wellID), ...
+                   'Position', [100, 100, 900, 700]);
+            
+            markerSize = 4;
+            lineWidth = 1.5;
+            fitLineWidth = 2.0;
+            
+            %% TOP PANEL: Normalized Inactivation
+            subplot(2, 1, 1);
+            hold on;
+            
+            % IV1 Normalized Inactivation (circles, filled)
+            iv1_norm = iv1Data.inactivationData / min(iv1Data.inactivationData);
+            plot(voltages, iv1_norm, '-o', ...
+                'Color', obj.colors.iv1, ...
+                'MarkerSize', markerSize, ...
+                'MarkerFaceColor', obj.colors.iv1, ...
+                'LineWidth', lineWidth, ...
+                'DisplayName', 'IV1 Inactivation');
+            
+            % IV1 Fit
+            if ~isempty(iv1Fit) && isfield(iv1Fit, 'fittedCurve')
+                plot(voltages, iv1Fit.fittedCurve, '--', ...
+                    'Color', obj.colors.iv1, ...
+                    'LineWidth', fitLineWidth, ...
+                    'DisplayName', sprintf('IV1 Fit (V_{1/2}=%.1f, k=%.1f)', ...
+                        iv1Fit.params.V_mid, iv1Fit.params.k));
+            end
+            
+            % IV2 Normalized Inactivation (circles, filled)
+            if ~isempty(iv2Data)
+                iv2_norm = iv2Data.inactivationData / min(iv2Data.inactivationData);
+                plot(voltages, iv2_norm, '-o', ...
+                    'Color', obj.colors.iv2, ...
+                    'MarkerSize', markerSize, ...
+                    'MarkerFaceColor', obj.colors.iv2, ...
+                    'LineWidth', lineWidth, ...
+                    'DisplayName', 'IV2 Inactivation');
+                
+                % IV2 Fit
+                if ~isempty(iv2Fit) && isfield(iv2Fit, 'fittedCurve')
+                    plot(voltages, iv2Fit.fittedCurve, '--', ...
+                        'Color', obj.colors.iv2, ...
+                        'LineWidth', fitLineWidth, ...
+                        'DisplayName', sprintf('IV2 Fit (V_{1/2}=%.1f, k=%.1f)', ...
+                            iv2Fit.params.V_mid, iv2Fit.params.k));
+                end
+            end
+            
+            ylabel('Normalized Inactivation (0-1)', 'FontSize', 12, 'FontWeight', 'bold');
+            xlabel('Conditioning Voltage (mV)', 'FontSize', 12, 'FontWeight', 'bold');
+            title(sprintf('Well %s: Inactivation Protocol', wellID), ...
+                'FontSize', 14, 'FontWeight', 'bold');
+            grid on;
+            legend('Location', 'best', 'FontSize', 9);
+            ylim([0, 1.1]);
+            xlim([min(voltages) - 5, max(voltages) + 5]);
+            hold off;
+            
+            %% BOTTOM PANEL: Test Pulse Current
+            subplot(2, 1, 2);
+            hold on;
+            
+            % IV1 Test Pulse Current (circles, filled)
+            plot(voltages, iv1Data.activationData, '-o', ...
+                'Color', obj.colors.iv1, ...
+                'MarkerSize', markerSize, ...
+                'MarkerFaceColor', obj.colors.iv1, ...
+                'LineWidth', lineWidth, ...
+                'DisplayName', 'IV1 Test Current');
+            
+            % IV2 Test Pulse Current (circles, filled)
+            if ~isempty(iv2Data)
+                plot(voltages, iv2Data.activationData, '-o', ...
+                    'Color', obj.colors.iv2, ...
+                    'MarkerSize', markerSize, ...
+                    'MarkerFaceColor', obj.colors.iv2, ...
+                    'LineWidth', lineWidth, ...
+                    'DisplayName', 'IV2 Test Current');
+            end
+            
+            ylabel('Test Pulse Current (pA)', 'FontSize', 12, 'FontWeight', 'bold');
+            xlabel('Conditioning Voltage (mV)', 'FontSize', 12, 'FontWeight', 'bold');
+            title('Test Pulse Current vs Conditioning Voltage', 'FontSize', 12);
+            grid on;
+            legend('Location', 'best', 'FontSize', 9);
+            xlim([min(voltages) - 5, max(voltages) + 5]);
+            hold off;
+            
+            obj.logger.logInfo(sprintf('Plotted dual-panel inactivation for well %s', wellID));
+        end
+        
+        function plotBatch(obj, wellIDs, voltages, measurements, fitResults, protocolType)
+            %PLOTBATCH Generate plots for multiple wells
+            %   Creates individual plots for each well
+            
+            numWells = length(wellIDs);
+            obj.logger.logInfo(sprintf('Generating %d plots for %s protocol...', ...
+                numWells, protocolType));
+            
+            for i = 1:numWells
+                wellID = wellIDs(i);
+                
+                % Extract data for this well
+                iv1Data = obj.extractWellData(measurements.iv1, i);
+                
+                if isfield(measurements, 'iv2')
+                    iv2Data = obj.extractWellData(measurements.iv2, i);
                 else
-                    D_fit = BoltzmannModel.inactivation(V_fit, ...
-                        well.fitParams.V_min, well.fitParams.V_max, ...
-                        well.fitParams.V_mid, well.fitParams.k);
+                    iv2Data = [];
                 end
                 
-                plot(V_fit, D_fit, '-', ...
-                    'Color', obj.colorMap.(well.fitQuality), ...
-                    'LineWidth', obj.config.plotting.lineWidth);
-            end
-            
-            hold off;
-            
-            % Formatting
-            xlabel('Voltage (mV)', 'FontSize', obj.config.plotting.fontSizeAxis);
-            
-            % Y-axis label depends on data type
-            if strcmp(well.dataType, 'conductance')
-                ylabel('Conductance (nS)', 'FontSize', obj.config.plotting.fontSizeAxis);
-            else
-                ylabel('Current (pA)', 'FontSize', obj.config.plotting.fontSizeAxis);
-            end
-            
-            % Title with key parameters
-            if well.fitParams.converged
-                titleStr = sprintf('%s: V½=%.1f mV, R²=%.3f', ...
-                    well.wellID, well.fitParams.V_mid, well.fitParams.R2);
-            else
-                titleStr = sprintf('%s: Failed', well.wellID);
-            end
-            title(titleStr, 'FontSize', obj.config.plotting.fontSizeTitle, ...
-                'Interpreter', 'none');
-            
-            grid on;
-            box on;
-        end
-        
-        function plotParameterDistributions(obj, fittedData, outputDir, fileName)
-            %PLOTPARAMETERDISTRIBUTIONS Plot histograms of fit parameters
-            
-            wells = fittedData.wells;
-            
-            % Extract parameters for Good + Acceptable fits only
-            goodOrAcceptable = strcmp({wells.fitQuality}, 'Good') | ...
-                              strcmp({wells.fitQuality}, 'Acceptable');
-            
-            if sum(goodOrAcceptable) == 0
-                obj.logger.logWarning('No Good/Acceptable fits to plot distributions');
-                return;
-            end
-            
-            V_mids = arrayfun(@(x) x.fitParams.V_mid, wells(goodOrAcceptable));
-            ks = arrayfun(@(x) x.fitParams.k, wells(goodOrAcceptable));
-            R2s = arrayfun(@(x) x.fitParams.R2, wells(goodOrAcceptable));
-            
-            fig = figure('Position', [100, 100, 1400, 500]);
-            fig.Color = 'white';
-            
-            % V_mid distribution
-            subplot(1, 3, 1);
-            histogram(V_mids, 15, 'FaceColor', [0.3, 0.6, 0.8], 'EdgeColor', 'black');
-            xlabel('V_{1/2} (mV)', 'FontSize', 12);
-            ylabel('Count', 'FontSize', 12);
-            title(sprintf('V_{1/2} Distribution\nMean: %.2f ± %.2f mV', ...
-                mean(V_mids), std(V_mids)), 'FontSize', 12);
-            grid on;
-            
-            % k distribution
-            subplot(1, 3, 2);
-            histogram(ks, 15, 'FaceColor', [0.8, 0.5, 0.3], 'EdgeColor', 'black');
-            xlabel('Slope Factor k (mV)', 'FontSize', 12);
-            ylabel('Count', 'FontSize', 12);
-            title(sprintf('Slope Factor Distribution\nMean: %.2f ± %.2f mV', ...
-                mean(ks), std(ks)), 'FontSize', 12);
-            grid on;
-            
-            % R² distribution
-            subplot(1, 3, 3);
-            histogram(R2s, 15, 'FaceColor', [0.3, 0.8, 0.5], 'EdgeColor', 'black');
-            xlabel('R²', 'FontSize', 12);
-            ylabel('Count', 'FontSize', 12);
-            title(sprintf('R² Distribution\nMean: %.4f', mean(R2s)), 'FontSize', 12);
-            xlim([0.7, 1.0]);
-            grid on;
-            
-            sgtitle(sprintf('%s - Parameter Distributions (Good + Acceptable Fits)', fileName), ...
-                'Interpreter', 'none', 'FontSize', 14, 'FontWeight', 'bold');
-            
-            % Save
-            figName = fullfile(outputDir, sprintf('%s_parameter_distributions.png', fileName));
-            saveas(fig, figName);
-            close(fig);
-            
-            obj.logger.logInfo('Saved parameter distribution plots');
-        end
-        
-        function plotFitQualitySummary(obj, fittedData, outputDir, fileName)
-            %PLOTFITQUALITYSUMMARY Pie chart of fit quality categories
-            
-            summary = fittedData.summary;
-            
-            categories = {'Good', 'Acceptable', 'Poor', 'Failed'};
-            counts = [summary.fitResults.good, summary.fitResults.acceptable, ...
-                     summary.fitResults.poor, summary.fitResults.failed];
-            
-            % Remove zero categories
-            nonzero = counts > 0;
-            categories = categories(nonzero);
-            counts = counts(nonzero);
-            
-            if isempty(counts)
-                obj.logger.logWarning('No fit results to plot');
-                return;
-            end
-            
-            fig = figure('Position', [100, 100, 800, 600]);
-            fig.Color = 'white';
-            
-            % Create pie chart
-            colors = zeros(length(categories), 3);
-            for i = 1:length(categories)
-                colors(i, :) = obj.colorMap.(categories{i});
-            end
-            
-            pie(counts, categories);
-            colormap(colors);
-            
-            title(sprintf('%s - Fit Quality Summary\nTotal: %d wells', ...
-                fileName, sum(counts)), ...
-                'Interpreter', 'none', 'FontSize', 14, 'FontWeight', 'bold');
-            
-            % Add text summary
-            annotation('textbox', [0.15, 0.05, 0.7, 0.1], ...
-                'String', sprintf('Good: %d (%.1f%%) | Acceptable: %d (%.1f%%) | Poor: %d (%.1f%%) | Failed: %d (%.1f%%)', ...
-                    summary.fitResults.good, 100*summary.fitResults.good/sum(counts), ...
-                    summary.fitResults.acceptable, 100*summary.fitResults.acceptable/sum(counts), ...
-                    summary.fitResults.poor, 100*summary.fitResults.poor/sum(counts), ...
-                    summary.fitResults.failed, 100*summary.fitResults.failed/sum(counts)), ...
-                'EdgeColor', 'none', 'FontSize', 11, 'HorizontalAlignment', 'center');
-            
-            % Save
-            figName = fullfile(outputDir, sprintf('%s_fit_quality_summary.png', fileName));
-            saveas(fig, figName);
-            close(fig);
-            
-            obj.logger.logInfo('Saved fit quality summary plot');
-        end
-        
-        function plotVmidVsR2(obj, fittedData, outputDir, fileName)
-            %PLOTVMIDVSR2 Scatter plot of V_mid vs R² colored by quality
-            
-            wells = fittedData.wells;
-            converged = arrayfun(@(x) x.fitParams.converged, wells);
-            
-            if sum(converged) == 0
-                obj.logger.logWarning('No converged fits to plot');
-                return;
-            end
-            
-            fig = figure('Position', [100, 100, 800, 600]);
-            fig.Color = 'white';
-            
-            hold on;
-            
-            % Plot by quality category
-            qualities = {'Good', 'Acceptable', 'Poor'};
-            for q = 1:length(qualities)
-                quality = qualities{q};
-                mask = converged & strcmp({wells.fitQuality}, quality);
+                % Extract fit results
+                iv1Fit = [];
+                iv2Fit = [];
+                if ~isempty(fitResults)
+                    if i <= length(fitResults)
+                        if isfield(fitResults(i), 'iv1')
+                            iv1Fit = fitResults(i).iv1;
+                        end
+                        if isfield(fitResults(i), 'iv2')
+                            iv2Fit = fitResults(i).iv2;
+                        end
+                    end
+                end
                 
-                if sum(mask) > 0
-                    V_mids = arrayfun(@(x) x.fitParams.V_mid, wells(mask));
-                    R2s = arrayfun(@(x) x.fitParams.R2, wells(mask));
-                    
-                    scatter(V_mids, R2s, 100, ...
-                        'MarkerFaceColor', obj.colorMap.(quality), ...
-                        'MarkerEdgeColor', 'black', ...
-                        'LineWidth', 1.0, ...
-                        'DisplayName', quality);
+                % Generate appropriate plot
+                if strcmp(protocolType, 'activation')
+                    obj.plotActivationDualAxis(wellID, voltages, iv1Data, iv2Data, iv1Fit, iv2Fit);
+                elseif strcmp(protocolType, 'inactivation')
+                    obj.plotInactivationDualPanel(wellID, voltages, iv1Data, iv2Data, iv1Fit, iv2Fit);
                 end
             end
             
-            hold off;
+            obj.logger.logInfo(sprintf('✓ Generated %d plots', numWells));
+        end
+    end
+    
+    methods (Access = private)
+        function wellData = extractWellData(obj, ivData, wellIndex)
+            %EXTRACTWELLDATA Extract single well's data from IV measurements
             
-            xlabel('V_{1/2} (mV)', 'FontSize', 12);
-            ylabel('R²', 'FontSize', 12);
-            title(sprintf('%s - V_{1/2} vs Fit Quality', fileName), ...
-                'Interpreter', 'none', 'FontSize', 14, 'FontWeight', 'bold');
+            fields = fieldnames(ivData);
+            wellData = struct();
             
-            legend('Location', 'best', 'FontSize', 11);
-            grid on;
-            box on;
-            
-            % Add threshold lines
-            yline(obj.config.boltzmann.corrThreshold, '--k', 'Good', ...
-                'LineWidth', 1.5, 'LabelHorizontalAlignment', 'left');
-            yline(obj.config.boltzmann.acceptableThreshold, '--k', 'Acceptable', ...
-                'LineWidth', 1.5, 'LabelHorizontalAlignment', 'left');
-            
-            % Save
-            figName = fullfile(outputDir, sprintf('%s_vmid_vs_r2.png', fileName));
-            saveas(fig, figName);
-            close(fig);
-            
-            obj.logger.logInfo('Saved V_mid vs R² scatter plot');
+            for i = 1:length(fields)
+                fieldName = fields{i};
+                % Extract row for this well (handle both 1D and 2D arrays)
+                if size(ivData.(fieldName), 1) >= wellIndex
+                    wellData.(fieldName) = ivData.(fieldName)(wellIndex, :);
+                end
+            end
         end
     end
 end
