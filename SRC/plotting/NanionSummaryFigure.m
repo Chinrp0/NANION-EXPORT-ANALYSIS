@@ -123,7 +123,7 @@ classdef NanionSummaryFigure < handle
             axis off;
             if ~isempty(sharedLegendHandles)
                 legend(sharedLegendHandles, sharedLegendLabels, ...
-                    'Location', 'center', ...
+                    'Location', 'west', ...
                     'FontSize', 9, ...
                     'Box', 'on');
                 title('Legend', 'FontSize', 11, 'FontWeight', 'bold', 'Visible', 'on');
@@ -286,7 +286,7 @@ classdef NanionSummaryFigure < handle
             wellIdx = find(strcmp(filteredData.wellIDs, wellID), 1);
             
             if isempty(wellIdx)
-                text(0.5, 0.5, 'Well not found', 'HorizontalAlignment', 'center');
+                text(0.5, 0.5, 'Well not found', 'HorizontalAlignment', 'west');
                 legendHandles = [];
                 legendLabels = {};
                 return;
@@ -407,7 +407,7 @@ classdef NanionSummaryFigure < handle
                 end
             end
             
-            ylabel('G/G_{max}', 'FontSize', 11, 'FontWeight', 'bold');
+            ylabel('Normalized Conductance (G/G_{max})', 'FontSize', 11, 'FontWeight', 'bold');
             ax = gca;
             ax.YColor = [0, 0, 0];
             ylim([0, 1.1]);
@@ -642,7 +642,7 @@ classdef NanionSummaryFigure < handle
             % Formatting
             xlabel('Voltage (mV)', 'FontSize', 10);
             if strcmp(protocolType, 'activation')
-                ylabel('G/G_{max}', 'FontSize', 10);
+                ylabel('Norm. Conductance (G/G_{max})', 'FontSize', 10);
             else
                 ylabel('Norm. Inactivation', 'FontSize', 10);
             end
@@ -735,7 +735,7 @@ classdef NanionSummaryFigure < handle
             % Turn off axes
             axis off;
             
-            % Create legend in this subplot (use 'best' instead of 'center')
+            % Create legend in this subplot 
             legend(handles, labels, ...
                 'Location', 'northwest', ...
                 'FontSize', 9, ...
