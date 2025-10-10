@@ -1,9 +1,8 @@
 classdef NanionAnalysisPipeline < handle
     %NANIONANALYSISPIPELINE Main controller for electrophysiology analysis
-    %   Orchestrates the complete analysis workflow with proper error handling
-    %   and logging. Designed for both single-file and batch processing.
+    %   UPDATED: Added Step 5 for statistics calculation and metadata export
     
-    properties (Access = public)  % Changed from private
+    properties (Access = public)
         config
         logger
     end
@@ -17,31 +16,23 @@ classdef NanionAnalysisPipeline < handle
     
     methods
         function obj = NanionAnalysisPipeline(configPath)
-            %NANIONANALYSISPIPELINE Constructor
-            %   configPath - Path to configuration file (optional)
-            
             if nargin < 1
                 configPath = [];
             end
             
             obj.ensureAnalysisPathAvailable();
             
-            % Initialize core components
             obj.config = NanionConfig(configPath);
             obj.logger = NanionLogger(obj.config);
             obj.ioManager = NanionIOManager(obj.config, obj.logger);
             obj.fileDetector = NanionFileDetector(obj.logger);
-            obj.dataExtractor = NanionDataExtractor(obj.config, obj.logger);  % ADDED FOR PHASE 2
+            obj.dataExtractor = NanionDataExtractor(obj.config, obj.logger);
             obj.results = {};
         end
         
         function results = runAnalysis(obj, filePaths, outputDir)
-            %RUNANALYSIS Execute complete analysis pipeline
-            %   filePaths - Cell array of file paths or single path string
-            %   outputDir - Output directory path
-            %   Returns: Cell array of result structures
+            %RUNANALYSIS Execute complete analysis pipeline with export
             
-            % Input validation
             if ischar(filePaths)
                 filePaths = {filePaths};
             end
@@ -54,26 +45,29 @@ classdef NanionAnalysisPipeline < handle
             obj.logger.logInfo(sprintf('Output directory: %s', outputDir));
             
             try
-                % Phase 1: File validation and type detection
+                % Phase 1: File validation
                 validatedFiles = obj.validateAndCategorizeFiles(filePaths);
                 
                 if isempty(validatedFiles)
-                    obj.logger.logError('No valid files found for processing');
+                    obj.logger.logError('No valid files found');
                     results = {};
                     return;
                 end
                 
-                % Phase 2: Process files (parallel or sequential)
+                % Phase 2: Process files
                 if obj.config.processing.useParallel && length(validatedFiles) > 1
                     results = obj.processFilesParallel(validatedFiles, outputDir);
                 else
                     results = obj.processFilesSequential(validatedFiles, outputDir);
                 end
                 
-                % Phase 3: Generate summary report
+                % Phase 3: Export summary tables
+                obj.exportSummaryTables(results, outputDir);
+                
+                % Phase 4: Generate summary report
                 obj.generateSummaryReport(results, outputDir);
                 
-                obj.logger.logInfo('Analysis pipeline completed successfully');
+                obj.logger.logInfo('✓ Analysis pipeline completed successfully');
                 
             catch ME
                 obj.logger.logError(sprintf('Pipeline failed: %s', ME.message));
@@ -83,8 +77,6 @@ classdef NanionAnalysisPipeline < handle
         end
         
         function fileInfo = validateAndCategorizeFiles(obj, filePaths)
-            %VALIDATEANDCATEGORIZEFILES Validate files and detect protocols
-            
             obj.logger.logInfo('Validating and categorizing input files...');
             
             fileInfo = {};
@@ -92,13 +84,11 @@ classdef NanionAnalysisPipeline < handle
                 filePath = filePaths{i};
                 
                 try
-                    % Basic file validation
                     if ~exist(filePath, 'file')
                         obj.logger.logWarning(sprintf('File not found: %s', filePath));
                         continue;
                     end
                     
-                    % Quick read to determine file type
                     protocolInfo = obj.fileDetector.detectProtocol(filePath);
                     
                     if isempty(protocolInfo)
@@ -120,13 +110,11 @@ classdef NanionAnalysisPipeline < handle
                 end
             end
             
-            obj.logger.logInfo(sprintf('File validation complete: %d/%d files valid', ...
+            obj.logger.logInfo(sprintf('File validation: %d/%d files valid', ...
                 length(fileInfo), length(filePaths)));
         end
         
         function results = processFilesSequential(obj, validatedFiles, outputDir)
-            %PROCESSFILESSEQUENTIAL Process files one by one
-            
             results = cell(length(validatedFiles), 1);
             
             for i = 1:length(validatedFiles)
@@ -148,12 +136,9 @@ classdef NanionAnalysisPipeline < handle
         end
         
         function results = processFilesParallel(obj, validatedFiles, outputDir)
-            %PROCESSFILESPARALLEL Process files in parallel
-            
             obj.logger.logInfo(sprintf('Starting parallel processing with %d workers', ...
                 obj.config.processing.maxWorkers));
             
-            % Initialize parallel pool - FAIL if this doesn't work
             poolObj = obj.initializeParallelPool();
             
             if isempty(poolObj)
@@ -162,8 +147,6 @@ classdef NanionAnalysisPipeline < handle
             end
             
             results = cell(length(validatedFiles), 1);
-            
-            % Submit parallel jobs
             futures = parallel.FevalFuture.empty(length(validatedFiles), 0);
             
             for i = 1:length(validatedFiles)
@@ -171,7 +154,6 @@ classdef NanionAnalysisPipeline < handle
                     validatedFiles{i}, outputDir, obj.config);
             end
             
-            % Collect results with progress monitoring
             for i = 1:length(validatedFiles)
                 try
                     results{i} = fetchOutputs(futures(i));
@@ -183,24 +165,25 @@ classdef NanionAnalysisPipeline < handle
                 catch ME
                     results{i} = struct('status', 'failed', 'error', ME.message, ...
                         'fileName', validatedFiles{i}.name);
-                    obj.logger.logError(sprintf('✗ Failed %d/%d: %s - %s', ...
-                        i, length(validatedFiles), validatedFiles{i}.name, ME.message));
+                    obj.logger.logError(sprintf('✗ Failed %d/%d: %s', ...
+                        i, length(validatedFiles), validatedFiles{i}.name));
                 end
             end
         end
         
         function result = processSingleFile(obj, fileInfo, outputDir)
-            %PROCESSSINGLEFILE Core single-file processing logic - Phase 3 Version
+            %PROCESSSINGLEFILE Core processing with statistics and export
             
-            obj.logger.logInfo(sprintf('Processing data from: %s', fileInfo.name));
+            obj.logger.logInfo(sprintf('Processing: %s', fileInfo.name));
             
             try
-                % Step 1: Read and parse data
+                % Step 1: Read and parse
                 obj.logger.logInfo('Step 1: Reading and parsing data...');
                 rawData = obj.ioManager.readFile(fileInfo.path);
                 parsedData = obj.ioManager.parseData(rawData, fileInfo.protocol);
+                parsedData.fileName = fileInfo.name;  % Store file name
                 
-                % Step 2: Extract measurements with Well_ID mapping
+                % Step 2: Extract measurements (now includes current density & metadata)
                 obj.logger.logInfo('Step 2: Extracting measurements...');
                 extractedData = obj.dataExtractor.extractMeasurements(parsedData);
                 
@@ -212,8 +195,12 @@ classdef NanionAnalysisPipeline < handle
                     filteredData.numWellsPassed, filteredData.numWellsTotal, ...
                     100 * filteredData.numWellsPassed / filteredData.numWellsTotal));
                 
-                % Step 4: Fit Boltzmann curves (NEW FOR PHASE 3)
-                obj.logger.logInfo('Step 4: Fitting Boltzmann curves...');
+                % Step 4: Calculate sweep statistics
+                obj.logger.logInfo('Step 4: Calculating sweep statistics...');
+                filteredData = obj.dataExtractor.calculateSweepStatistics(filteredData);
+                
+                % Step 5: Fit Boltzmann curves
+                obj.logger.logInfo('Step 5: Fitting Boltzmann curves...');
                 fitter = NanionBoltzmannFitter(obj.config, obj.logger);
                 fittedData = fitter.fitBoltzmann(filteredData);
                 
@@ -223,14 +210,22 @@ classdef NanionAnalysisPipeline < handle
                     fittedData.summary.fitResults.poor, ...
                     fittedData.summary.fitResults.failed));
                 
-                % Create comprehensive result structure
+                % Step 6: Build summary table
+                obj.logger.logInfo('Step 6: Building summary table...');
+                tableBuilder = NanionSummaryTableBuilder(obj.config, obj.logger);
+                summaryTable = tableBuilder.buildSummaryTable(filteredData, fittedData, fileInfo.name);
+                
+                % Create result structure
                 result = struct(...
                     'fileName', fileInfo.name, ...
                     'protocol', fileInfo.protocol, ...
                     'extractedData', extractedData, ...
                     'filteredData', filteredData, ...
-                    'fittedData', fittedData, ...   % NEW
-                    'processingSteps', {{'dataReading', 'measurementExtraction', 'qualityFiltering', 'boltzmannFitting'}}, ...
+                    'fittedData', fittedData, ...
+                    'summaryTable', summaryTable, ...
+                    'processingSteps', {{'dataReading', 'measurementExtraction', ...
+                                        'qualityFiltering', 'statisticsCalculation', ...
+                                        'boltzmannFitting', 'summaryTableBuilding'}}, ...
                     'outputDir', fullfile(outputDir, fileInfo.name));
                 
                 obj.logger.logInfo(sprintf('✓ Processing complete: %s', fileInfo.name));
@@ -241,10 +236,43 @@ classdef NanionAnalysisPipeline < handle
             end
         end
 
-        
-        function generateSummaryReport(obj, results, outputDir)
-            %GENERATESUMMARYREPORT Create analysis summary
+        function exportSummaryTables(obj, results, outputDir)
+            %EXPORTSUMMARYTABLES Export all summary tables with grouping
             
+            obj.logger.logInfo('=== EXPORTING SUMMARY TABLES ===');
+            
+            % Filter successful results
+            successfulResults = results(cellfun(@(x) strcmp(x.status, 'success'), results));
+            
+            if isempty(successfulResults)
+                obj.logger.logWarning('No successful results to export');
+                return;
+            end
+            
+            % Extract summary tables and file names
+            summaryTables = cellfun(@(x) x.summaryTable, successfulResults, 'UniformOutput', false);
+            fileNames = cellfun(@(x) x.fileName, successfulResults, 'UniformOutput', false);
+            
+            % Create exporter
+            exporter = NanionMetadataExporter(obj.config, obj.logger);
+            
+            % Export individual and aggregated tables
+            if length(summaryTables) == 1
+                % Single file
+                outputPath = exporter.exportSummaryTable(summaryTables{1}, outputDir, fileNames{1});
+            else
+                % Multiple files
+                outputPath = exporter.exportMultipleFiles(summaryTables, outputDir, fileNames);
+                
+                % Also export grouped summaries
+                aggregatedTable = vertcat(summaryTables{:});
+                exporter.exportGroupedSummaries(aggregatedTable, outputPath);
+            end
+            
+            obj.logger.logInfo(sprintf('✓ Summary tables exported to: %s', outputPath));
+        end
+
+        function generateSummaryReport(obj, results, outputDir)
             successCount = sum(cellfun(@(x) strcmp(x.status, 'success'), results));
             totalCount = length(results);
             
@@ -277,8 +305,6 @@ classdef NanionAnalysisPipeline < handle
     
     methods (Access = private)
         function poolObj = initializeParallelPool(obj)
-            %INITIALIZEPARALLELPOOL Setup parallel computing
-            
             poolObj = gcp('nocreate');
             
             if isempty(poolObj)
@@ -298,15 +324,10 @@ classdef NanionAnalysisPipeline < handle
         end
         
         function fileName = extractFileName(~, filePath)
-            %EXTRACTFILENAME Get base filename without extension
             [~, fileName, ~] = fileparts(filePath);
         end
 
         function ensureAnalysisPathAvailable(obj)
-            %ENSUREANALYSISPATHAVAILABLE Ensure all required directories are in path
-            %   UPDATED: Comprehensive check for all module directories
-            
-            % Define all required classes and their expected directories
             requiredComponents = struct(...
                 'NanionConfig', 'config', ...
                 'NanionLogger', 'utils', ...
@@ -314,12 +335,13 @@ classdef NanionAnalysisPipeline < handle
                 'NanionBoltzmannFitter', 'fitting', ...
                 'BoltzmannModel', 'fitting', ...
                 'FitQualityAssessor', 'fitting', ...
-                'NanionBoltzmannPlotter', 'plotting');
+                'NanionBoltzmannPlotter', 'plotting', ...
+                'NanionSummaryTableBuilder', 'io', ...
+                'NanionMetadataExporter', 'io');
             
             componentNames = fieldnames(requiredComponents);
             missingComponents = {};
             
-            % Check which components are missing
             for i = 1:length(componentNames)
                 className = componentNames{i};
                 if ~exist(className, 'class')
@@ -327,30 +349,25 @@ classdef NanionAnalysisPipeline < handle
                 end
             end
             
-            % If everything is available, return early
             if isempty(missingComponents)
                 return;
             end
             
-            % Try to locate and add missing directories
             fprintf('Some required classes not found. Attempting to add paths...\n');
             
-            % Get current file location
             currentFile = mfilename('fullpath');
             currentDir = fileparts(currentFile);
             
-            % Try to find repository root
             possibleRoots = {
-                currentDir,                    % Current directory (pipeline/)
-                fileparts(currentDir),         % Parent directory (SRC/)
-                fullfile(fileparts(currentDir), 'SRC'),  % ../SRC/
-                pwd                            % Current working directory
+                currentDir,
+                fileparts(currentDir),
+                fullfile(fileparts(currentDir), 'SRC'),
+                pwd
             };
             
             repoRoot = '';
             for i = 1:length(possibleRoots)
                 testRoot = possibleRoots{i};
-                % Check if this looks like the SRC directory
                 if exist(fullfile(testRoot, 'config'), 'dir') && ...
                    exist(fullfile(testRoot, 'analysis'), 'dir') && ...
                    exist(fullfile(testRoot, 'fitting'), 'dir')
@@ -361,13 +378,9 @@ classdef NanionAnalysisPipeline < handle
             
             if isempty(repoRoot)
                 error('NanionAnalysisPipeline:PathNotFound', ...
-                    ['Cannot locate repository root. Missing classes: ' strjoin(missingComponents, ', ') ...
-                    '. Please run setup_nanion_paths() manually or ensure you are in the correct directory.']);
+                    ['Cannot locate repository root. Missing classes: ' strjoin(missingComponents, ', ')]);
             end
             
-            fprintf('Found repository root: %s\n', repoRoot);
-            
-            % Add all required directories
             requiredDirs = {'config', 'utils', 'io', 'analysis', 'fitting', 'plotting', 'pipeline', 'detection'};
             
             for i = 1:length(requiredDirs)
@@ -378,7 +391,6 @@ classdef NanionAnalysisPipeline < handle
                 end
             end
             
-            % Verify all components are now available
             stillMissing = {};
             for i = 1:length(componentNames)
                 className = componentNames{i};
@@ -389,26 +401,19 @@ classdef NanionAnalysisPipeline < handle
             
             if ~isempty(stillMissing)
                 error('NanionAnalysisPipeline:PathSetupFailed', ...
-                    ['Failed to locate required classes: ' strjoin(stillMissing, ', ') ...
-                    '. Please check your repository structure or run setup_nanion_paths() manually.']);
+                    ['Failed to locate required classes: ' strjoin(stillMissing, ', ')]);
             end
             
             fprintf('✓ All required paths added successfully\n\n');
         end
-
-        
     end
     
     methods (Static)
         function result = processSingleFileStatic(fileInfo, outputDir, config)
-            %PROCESSSINGLEFILESTATIC Static version for parallel processing - Phase 3
-            
-            % Create temporary instances for parallel workers
             logger = NanionLogger(config);
             ioManager = NanionIOManager(config, logger);
             dataExtractor = NanionDataExtractor(config, logger);
             
-            % Create temporary pipeline instance
             tempPipeline = NanionAnalysisPipeline();
             tempPipeline.config = config;
             tempPipeline.logger = logger;

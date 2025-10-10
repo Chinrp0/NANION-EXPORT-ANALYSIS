@@ -1,7 +1,6 @@
 classdef NanionDataExtractor < handle
     %NANIONDATAEXTRACTOR Extract electrophysiology measurements from parsed data
-    %   REFACTORED: Extracts ALL sweeps per IV (23 sweeps → [wells × 23] arrays)
-    %   Quality filtering uses MEDIAN-based approach (robust to outliers)
+    %   UPDATED: Added current density, sweep statistics, and metadata extraction
     
     properties (Access = private)
         config
@@ -10,15 +9,13 @@ classdef NanionDataExtractor < handle
     
     methods
         function obj = NanionDataExtractor(config, logger)
-            %NANIONDATAEXTRACTOR Constructor
             obj.config = config;
             obj.logger = logger;
         end
         
         function extractedData = extractMeasurements(obj, parsedData)
             %EXTRACTMEASUREMENTS Extract ALL sweep measurements from parsed table
-            %   NOW EXTRACTS: [numWells × numSweeps] arrays instead of [numWells × 1]
-            %   CALCULATES: Conductance for activation protocols
+            %   NOW INCLUDES: Current density and metadata extraction
             
             dataTable = parsedData.dataTable;
             protocolInfo = parsedData.protocolInfo;
@@ -30,14 +27,19 @@ classdef NanionDataExtractor < handle
                 % Extract Well IDs
                 wellIDs = obj.extractWellIDs(dataTable, dataStartRow);
                 
+                % Extract well-level metadata (Cell Type, Cell Concentration)
+                wellMetadata = obj.extractWellMetadata(dataTable);
+                
                 % Extract measurements (ALL sweeps per IV)
                 measurements = obj.extractByProtocol(dataTable, protocolInfo, dataStartRow);
                 
                 % Package extracted data
                 extractedData = struct(...
                     'wellIDs', wellIDs, ...
+                    'wellMetadata', wellMetadata, ...
                     'measurements', measurements, ...
                     'protocolInfo', protocolInfo, ...
+                    'fileName', parsedData.fileName, ...
                     'numWells', length(wellIDs), ...
                     'numIVs', protocolInfo.numIVs, ...
                     'numSweeps', protocolInfo.numSweeps);
@@ -48,8 +50,14 @@ classdef NanionDataExtractor < handle
                 % Calculate conductance for activation protocols
                 if strcmp(protocolInfo.type, 'activation')
                     extractedData = obj.calculateConductance(extractedData);
-                    extractedData = obj.normalizeConductance(extractedData);  % NEW: Add this line
+                    extractedData = obj.normalizeConductance(extractedData);
                 end
+                
+                % Calculate current density (for ALL protocols)
+                extractedData = obj.calculateCurrentDensity(extractedData);
+                
+                % Extract IV-level metadata (Compound, Concentration)
+                extractedData = obj.extractConditions(extractedData, dataTable);
                 
             catch ME
                 obj.logger.logError(sprintf('Measurement extraction failed: %s', ME.message));
@@ -57,63 +65,73 @@ classdef NanionDataExtractor < handle
             end
         end
 
-                function extractedData = calculateConductance(obj, extractedData)
-            %CALCULATECONDUCTANCE Calculate conductance for activation protocols
-            %   G = I / (V - V_rev) in nanoSiemens (nS)
-            %   Only applies to activation protocols
+        function extractedData = calculateCurrentDensity(obj, extractedData)
+            %CALCULATECURRENTDENSITY Calculate sweep-by-sweep current density
+            %   Density = I_peak (pA) / Capacitance (pF) for each sweep at each voltage
             
-            if ~strcmp(extractedData.protocolInfo.type, 'activation')
-                % Not activation - no conductance needed
-                return;
-            end
+            obj.logger.logInfo('Calculating current density (I/C)...');
             
-            obj.logger.logInfo('Calculating conductance (G = I / (V - E_rev))...');
-            
-            voltages = extractedData.protocolInfo.voltages;  % [1 × 23] mV
-            V_rev = obj.config.nernstPotential;  % mV (typically 68 mV for Na+)
-            
-            % Calculate driving force for each voltage step
-            drivingForce = voltages - V_rev;  % [1 × 23] mV
-            
-            % Process each IV
             measurements = extractedData.measurements;
             ivFields = fieldnames(measurements);
             
             for i = 1:length(ivFields)
                 ivName = ivFields{i};
                 
-                % Get peak current [numWells × 23] in pA
-                peakCurrent = measurements.(ivName).peakCurrent;
+                % Get peak current [numWells × 23] and capacitance [numWells × 23]
+                peakCurrent = measurements.(ivName).peakCurrent;  % pA
+                capacitance = measurements.(ivName).capacitance;  % pF
                 
-                % Calculate conductance: G = I / (V - V_rev)
-                % Units: pA / mV = nS (nanoSiemens)
-                conductance = peakCurrent ./ drivingForce;  % [numWells × 23]
+                % Calculate density: I / C (element-wise division)
+                currentDensity = peakCurrent ./ capacitance;  % [numWells × 23] in pA/pF
                 
-                % Handle division by zero (if any voltage equals V_rev)
-                conductance(isinf(conductance)) = NaN;
+                % Handle division by zero/NaN (if capacitance is zero or NaN)
+                currentDensity(isinf(currentDensity) | isnan(capacitance) | capacitance <= 0) = NaN;
                 
-                % Store conductance alongside current
-                measurements.(ivName).conductance = conductance;  % nS
+                % Store current density alongside current
+                measurements.(ivName).currentDensity = currentDensity;  % pA/pF
                 
-                obj.logger.logDebug(sprintf('%s: Calculated conductance (G = I/(V-%.1f))', ...
-                    ivName, V_rev));
+                obj.logger.logDebug(sprintf('%s: Calculated current density (I/C)', ivName));
             end
             
-            % Update extracted data
             extractedData.measurements = measurements;
+            obj.logger.logInfo('✓ Current density calculated');
+        end
+
+        function extractedData = calculateConductance(obj, extractedData)
+            %CALCULATECONDUCTANCE Calculate conductance for activation protocols
             
-            obj.logger.logInfo(sprintf('✓ Conductance calculated for %d wells', ...
-                extractedData.numWells));
+            if ~strcmp(extractedData.protocolInfo.type, 'activation')
+                return;
+            end
+            
+            obj.logger.logInfo('Calculating conductance (G = I / (V - E_rev))...');
+            
+            voltages = extractedData.protocolInfo.voltages;
+            V_rev = obj.config.nernstPotential;
+            drivingForce = voltages - V_rev;
+            
+            measurements = extractedData.measurements;
+            ivFields = fieldnames(measurements);
+            
+            for i = 1:length(ivFields)
+                ivName = ivFields{i};
+                peakCurrent = measurements.(ivName).peakCurrent;
+                conductance = peakCurrent ./ drivingForce;
+                conductance(isinf(conductance)) = NaN;
+                measurements.(ivName).conductance = conductance;
+                
+                obj.logger.logDebug(sprintf('%s: Calculated conductance', ivName));
+            end
+            
+            extractedData.measurements = measurements;
+            obj.logger.logInfo('✓ Conductance calculated');
         end
 
         function extractedData = normalizeConductance(obj, extractedData)
             %NORMALIZECONDUCTANCE Normalize conductance to 0-1 range per well per IV
-            %   G_norm = (G - G_min) / (G_max - G_min)
-            %   Only applies to activation protocols
-            %   Stores both raw and normalized conductance
             
             if ~strcmp(extractedData.protocolInfo.type, 'activation')
-                return;  % Only for activation protocols
+                return;
             end
             
             obj.logger.logInfo('Normalizing conductance to 0-1 range per well...');
@@ -123,12 +141,8 @@ classdef NanionDataExtractor < handle
             
             for i = 1:length(ivFields)
                 ivName = ivFields{i};
-                
-                % Get raw conductance [numWells × 23] in nS
                 conductance_raw = measurements.(ivName).conductance;
                 numWells = size(conductance_raw, 1);
-                
-                % Normalize each well independently
                 conductance_normalized = zeros(size(conductance_raw));
                 
                 for wellIdx = 1:numWells
@@ -136,42 +150,36 @@ classdef NanionDataExtractor < handle
                     G_min = min(G);
                     G_max = max(G);
                     
-                    if G_max ~= G_min  % Avoid division by zero
+                    if G_max ~= G_min
                         conductance_normalized(wellIdx, :) = (G - G_min) / (G_max - G_min);
                     else
                         conductance_normalized(wellIdx, :) = zeros(size(G));
-                        obj.logger.logWarning(sprintf('%s Well %d: G_max == G_min, setting normalized to 0', ...
-                            ivName, wellIdx));
                     end
                 end
                 
-                % Store both raw and normalized
-                measurements.(ivName).conductance_raw = conductance_raw;  % Preserve original
-                measurements.(ivName).conductance = conductance_normalized;  % Replace with normalized
+                % Store BOTH raw and normalized
+                measurements.(ivName).conductance_raw = conductance_raw;
+                measurements.(ivName).conductance = conductance_normalized;
                 
-                obj.logger.logDebug(sprintf('%s: Normalized conductance for %d wells', ivName, numWells));
+                obj.logger.logDebug(sprintf('%s: Normalized conductance', ivName));
             end
             
             extractedData.measurements = measurements;
-            obj.logger.logInfo('✓ Conductance normalized (0-1 range)');
+            obj.logger.logInfo('✓ Conductance normalized (raw stored separately)');
         end
 
         function filteredData = applyQualityFilters(obj, extractedData)
             %APPLYQUALITYFILTERS Apply MEDIAN-BASED filters with IV2 fallback
-            %   ROBUST: Uses median across 23 sweeps (resistant to outliers)
-            %   OPTIONAL: Checks if max is not wildly divergent from median
             
-            obj.logger.logInfo('Applying quality filters (median-based, robust to outliers)...');
+            obj.logger.logInfo('Applying quality filters...');
             
             measurements = extractedData.measurements;
             filters = obj.config.filters;
             numWells = extractedData.numWells;
             
-            % Initialize quality assessment arrays
             qualityMask = false(numWells, 1);
             ivUsedForFiltering = strings(numWells, 1);
             
-            % Get IV1 and IV2 data
             iv1Data = measurements.iv1;
             hasIV2 = isfield(measurements, 'iv2');
             if hasIV2
@@ -180,47 +188,202 @@ classdef NanionDataExtractor < handle
                 iv2Data = [];
             end
             
-            % Apply filtering with IV2 fallback logic
             for wellIdx = 1:numWells
                 [passed, ivUsed] = obj.assessWellQuality(iv1Data, iv2Data, wellIdx, filters, hasIV2);
                 qualityMask(wellIdx) = passed;
                 ivUsedForFiltering(wellIdx) = ivUsed;
             end
             
-            % Create filter report
             filterReport = obj.createIVFallbackFilterReport(extractedData.wellIDs, measurements, ...
                 qualityMask, ivUsedForFiltering, filters, hasIV2);
             
-            % Apply mask to all measurements
             filteredMeasurements = obj.applyFilterMask(measurements, qualityMask);
             
             filteredData = struct(...
                 'wellIDs', extractedData.wellIDs(qualityMask), ...
+                'wellMetadata', struct(...
+                    'cellType', extractedData.wellMetadata.cellType(qualityMask), ...
+                    'cellConcentration', extractedData.wellMetadata.cellConcentration(qualityMask)), ...
                 'measurements', filteredMeasurements, ...
                 'protocolInfo', extractedData.protocolInfo, ...
+                'fileName', extractedData.fileName, ...
                 'qualityMask', qualityMask, ...
                 'ivUsedForFiltering', ivUsedForFiltering(qualityMask), ...
                 'filterReport', filterReport, ...
                 'numWellsPassed', sum(qualityMask), ...
                 'numWellsTotal', length(qualityMask));
             
-            % Log filtering results
             obj.logIVFallbackFilteringResults(filterReport, hasIV2);
+        end
+
+        function filteredData = calculateSweepStatistics(obj, filteredData)
+            %CALCULATESWEEPSTATISTICS Calculate statistics across 23 sweeps for each well, each IV
+            %   Computes mean/min/max/std for all measurements
+            
+            obj.logger.logInfo('Calculating sweep statistics (mean/min/max/std across 23 sweeps)...');
+            
+            measurements = filteredData.measurements;
+            ivFields = fieldnames(measurements);
+            protocolType = filteredData.protocolInfo.type;
+            
+            for i = 1:length(ivFields)
+                ivName = ivFields{i};
+                ivData = measurements.(ivName);
+                
+                stats = struct();
+                
+                % Quality metrics (across 23 sweeps)
+                stats.seriesR = obj.computeStats(ivData.seriesResistance);
+                stats.sealR = obj.computeStats(ivData.sealResistance);
+                stats.capacitance = obj.computeStats(ivData.capacitance);
+                
+                % Current metrics (across 23 voltages)
+                stats.peakCurrent = obj.computeStats(ivData.peakCurrent);
+                stats.currentDensity = obj.computeStats(ivData.currentDensity);
+                
+                % Raw conductance (activation only) - BEFORE normalization
+                if strcmp(protocolType, 'activation') && isfield(ivData, 'conductance_raw')
+                    stats.conductance_raw = obj.computeStats(ivData.conductance_raw);
+                end
+                
+                % Store statistics
+                measurements.(ivName).statistics = stats;
+                
+                obj.logger.logDebug(sprintf('%s: Computed statistics for %d wells', ...
+                    ivName, size(ivData.seriesResistance, 1)));
+            end
+            
+            filteredData.measurements = measurements;
+            obj.logger.logInfo('✓ Sweep statistics calculated');
         end
     end
     
     methods (Access = private)
+        function stats = computeStats(obj, data)
+            %COMPUTESTATS Compute mean/min/max/std across columns (23 sweeps)
+            %   data: [numWells × 23]
+            %   Returns: struct with [numWells × 1] arrays
+            
+            stats = struct(...
+                'mean', mean(data, 2, 'omitnan'), ...
+                'min', min(data, [], 2, 'omitnan'), ...
+                'max', max(data, [], 2, 'omitnan'), ...
+                'std', std(data, 0, 2, 'omitnan'));
+        end
+
+        function wellMetadata = extractWellMetadata(obj, dataTable)
+            %EXTRACTWELLMETADATA Extract well-level metadata (Cell Type, Cell Concentration)
+            %   These appear ONCE per well in columns 2-3
+            
+            numWells = height(dataTable);
+            
+            % Column 2: Cell Type
+            if size(dataTable, 2) >= 2
+                rawCellType = dataTable{:, 2};
+                cellType = obj.convertToString(rawCellType);
+            else
+                obj.logger.logWarning('Cell Type column (2) not found');
+                cellType = repmat("", numWells, 1);
+            end
+            
+            % Column 3: Cell Concentration
+            if size(dataTable, 2) >= 3
+                rawCellConc = dataTable{:, 3};
+                cellConcentration = obj.convertToString(rawCellConc);
+            else
+                obj.logger.logWarning('Cell Concentration column (3) not found');
+                cellConcentration = repmat("", numWells, 1);
+            end
+            
+            wellMetadata = struct(...
+                'cellType', cellType, ...
+                'cellConcentration', cellConcentration);
+            
+            obj.logger.logDebug(sprintf('Extracted well metadata: %d unique cell types', ...
+                length(unique(cellType))));
+        end
+
+        function extractedData = extractConditions(obj, extractedData, dataTable)
+            %EXTRACTCONDITIONS Extract IV-level metadata (Compound, Concentration)
+            %   These appear in the FIRST SWEEP of each IV
+            
+            obj.logger.logInfo('Extracting Compound and Concentration metadata per IV...');
+            
+            protocolInfo = extractedData.protocolInfo;
+            columnMapping = protocolInfo.columnMapping;
+            numIVs = protocolInfo.numIVs;
+            numSweeps = protocolInfo.numSweeps;
+            numWells = extractedData.numWells;
+            measurements = extractedData.measurements;
+            
+            for iv = 1:numIVs
+                ivName = sprintf('iv%d', iv);
+                
+                % Calculate base column for this IV (sweep 1)
+                baseCol = 3 + (iv - 1) * (numSweeps * columnMapping.columnPattern);
+                
+                % Metadata columns in first sweep: baseCol + 1, baseCol + 2
+                compoundCol = baseCol + 1;
+                concentrationCol = baseCol + 2;
+                
+                % Extract Compound (string)
+                if compoundCol <= size(dataTable, 2)
+                    rawCompound = dataTable{:, compoundCol};
+                    compound = obj.convertToString(rawCompound);
+                else
+                    obj.logger.logWarning(sprintf('%s: Compound column %d not found', ivName, compoundCol));
+                    compound = repmat("", numWells, 1);
+                end
+                
+                % Extract Concentration (numeric, µM)
+                if concentrationCol <= size(dataTable, 2)
+                    rawConc = dataTable{:, concentrationCol};
+                    concentration = obj.convertToNumeric(rawConc);
+                else
+                    obj.logger.logWarning(sprintf('%s: Concentration column %d not found', ivName, concentrationCol));
+                    concentration = NaN(numWells, 1);
+                end
+                
+                % Store in measurements structure
+                measurements.(ivName).compound = compound;
+                measurements.(ivName).concentration = concentration;
+                
+                obj.logger.logDebug(sprintf('%s: Extracted metadata (columns %d,%d)', ...
+                    ivName, compoundCol, concentrationCol));
+            end
+            
+            extractedData.measurements = measurements;
+            obj.logger.logInfo('✓ Compound and Concentration extracted per IV');
+        end
+
+        function strArray = convertToString(obj, rawData)
+            %CONVERTTOSTRING Convert cell array to string array
+            
+            if isstring(rawData)
+                strArray = rawData;
+                return;
+            end
+            
+            strArray = strings(size(rawData));
+            
+            for i = 1:numel(rawData)
+                if ischar(rawData{i}) || isstring(rawData{i})
+                    strArray(i) = string(rawData{i});
+                elseif isnumeric(rawData{i})
+                    strArray(i) = string(num2str(rawData{i}));
+                else
+                    strArray(i) = "";
+                end
+            end
+            
+            strArray(ismissing(strArray)) = "";
+        end
+
         function wellIDs = extractWellIDs(obj, dataTable, ~)
             %EXTRACTWELLIDS Extract Well_ID values from first column
-            %   FIXED: dataTable is already sliced, so start from row 1
-            %   Note: Third parameter (dataStartRow) is ignored but kept for compatibility
             
-            % dataTable is already positioned at the data rows (no headers)
-            % Extract ALL rows from column 1
             wellColumn = dataTable{:, 1};
             wellIDs = string(wellColumn);
-            
-            % Filter out empty/missing well IDs
             validMask = ~ismissing(wellIDs) & wellIDs ~= "";
             wellIDs = wellIDs(validMask);
             
@@ -229,11 +392,8 @@ classdef NanionDataExtractor < handle
         
         function measurements = extractByProtocol(obj, dataTable, protocolInfo, ~)
             %EXTRACTBYPROTOCOL Extract ALL sweep measurements by protocol type
-            %   FIXED: dataTable is already sliced, so use it directly
-            %   Note: Fourth parameter (dataStartRow) is ignored but kept for compatibility
             
-            % dataTable is already positioned at the data section (no double-slicing)
-            dataRows = dataTable;  % Use the table as-is
+            dataRows = dataTable;
             
             switch protocolInfo.type
                 case 'activation'
@@ -241,18 +401,12 @@ classdef NanionDataExtractor < handle
                 case 'inactivation'
                     measurements = obj.extractInactivationMeasurements(dataRows, protocolInfo);
                 otherwise
-                    error('NanionDataExtractor:UnknownProtocol', ...
-                        'Unknown protocol type: %s', protocolInfo.type);
+                    error('NanionDataExtractor:UnknownProtocol', 'Unknown protocol: %s', protocolInfo.type);
             end
-            
-            obj.logger.logInfo(sprintf('Extracted %s measurements', protocolInfo.type));
         end
         
         function measurements = extractActivationMeasurements(obj, dataRows, protocolInfo)
             %EXTRACTACTIVATIONMEASUREMENTS Extract ALL activation sweeps
-            %   Column structure: Cols 1-3 = metadata, then every 6 columns per sweep
-            %   First sweep: Cols 4-9 [Compound, Conc, SeriesR(6), SealR(7), Cap(8), Peak(9)]
-            %   Returns [numWells × 23] arrays for all parameters
             
             columnMapping = protocolInfo.columnMapping;
             numIVs = protocolInfo.numIVs;
@@ -262,35 +416,23 @@ classdef NanionDataExtractor < handle
             
             for iv = 1:numIVs
                 ivName = sprintf('iv%d', iv);
-                
-                % Calculate base column for this IV
-                % IV1: baseCol = 3, IV2: baseCol = 3 + 23*6 = 141, etc.
                 baseCol = 3 + (iv - 1) * (numSweeps * columnMapping.columnPattern);
                 
-                % Generate column arrays for all 23 sweeps
-                % Series R at columns [6, 12, 18, ..., 138] for IV1
                 seriesCols = baseCol + 3 + (0:(numSweeps-1)) * columnMapping.columnPattern;
                 sealCols = baseCol + 4 + (0:(numSweeps-1)) * columnMapping.columnPattern;
                 capCols = baseCol + 5 + (0:(numSweeps-1)) * columnMapping.columnPattern;
                 peakCols = baseCol + 6 + (0:(numSweeps-1)) * columnMapping.columnPattern;
                 
-                % Extract ALL sweeps (returns [numWells × 23] arrays)
                 measurements.(ivName) = struct(...
                     'seriesResistance', obj.extractMultipleColumns(dataRows, seriesCols, 'seriesR'), ...
                     'sealResistance', obj.extractMultipleColumns(dataRows, sealCols, 'sealR'), ...
                     'capacitance', obj.extractMultipleColumns(dataRows, capCols, 'capacitance'), ...
                     'peakCurrent', obj.extractMultipleColumns(dataRows, peakCols, 'current'));
-                
-                obj.logger.logDebug(sprintf('IV%d: Extracted %d sweeps, columns %d-%d', ...
-                    iv, numSweeps, seriesCols(1), seriesCols(end)));
             end
         end
         
         function measurements = extractInactivationMeasurements(obj, dataRows, protocolInfo)
             %EXTRACTINACTIVATIONMEASUREMENTS Extract ALL inactivation sweeps
-            %   Column structure: Every 7 columns per sweep
-            %   First sweep: [Compound, Conc, SeriesR(6), SealR(7), Cap(8), Inact(9), Act(10)]
-            %   Returns [numWells × 23] arrays
             
             columnMapping = protocolInfo.columnMapping;
             numIVs = protocolInfo.numIVs;
@@ -300,36 +442,28 @@ classdef NanionDataExtractor < handle
             
             for iv = 1:numIVs
                 ivName = sprintf('iv%d', iv);
-                
-                % Base column for inactivation (7 columns per sweep)
                 baseCol = 3 + (iv - 1) * (numSweeps * columnMapping.columnPattern);
                 
-                % Generate column arrays for all sweeps
                 seriesCols = baseCol + 3 + (0:(numSweeps-1)) * columnMapping.columnPattern;
                 sealCols = baseCol + 4 + (0:(numSweeps-1)) * columnMapping.columnPattern;
                 capCols = baseCol + 5 + (0:(numSweeps-1)) * columnMapping.columnPattern;
                 inactCols = baseCol + 6 + (0:(numSweeps-1)) * columnMapping.columnPattern;
                 actCols = baseCol + 7 + (0:(numSweeps-1)) * columnMapping.columnPattern;
                 
-                % Extract ALL sweeps
                 measurements.(ivName) = struct(...
                     'seriesResistance', obj.extractMultipleColumns(dataRows, seriesCols, 'seriesR'), ...
                     'sealResistance', obj.extractMultipleColumns(dataRows, sealCols, 'sealR'), ...
                     'capacitance', obj.extractMultipleColumns(dataRows, capCols, 'capacitance'), ...
                     'inactivationData', obj.extractMultipleColumns(dataRows, inactCols, 'current'), ...
                     'activationData', obj.extractMultipleColumns(dataRows, actCols, 'current'));
-                
-                obj.logger.logDebug(sprintf('IV%d: Extracted %d sweeps', iv, numSweeps));
             end
         end
         
         function dataArray = extractMultipleColumns(obj, dataRows, columnIndices, paramType)
-            %EXTRACTMULTIPLECOLUMNS Extract multiple columns and return [numWells × numColumns] array
-            %   NEW METHOD: Extracts all 23 sweeps per parameter
+            %EXTRACTMULTIPLECOLUMNS Extract multiple columns
             
             numWells = height(dataRows);
             numCols = length(columnIndices);
-            
             dataArray = NaN(numWells, numCols);
             
             for colIdx = 1:numCols
@@ -338,24 +472,8 @@ classdef NanionDataExtractor < handle
                     rawData = dataRows{:, col};
                     numericData = obj.convertToNumeric(rawData);
                     dataArray(:, colIdx) = obj.applyUnitConversion(numericData, paramType);
-                else
-                    obj.logger.logWarning(sprintf('Column %d out of range, using NaN', col));
                 end
             end
-        end
-        
-        function values = extractAndConvert(obj, dataRows, columnIndex, paramType)
-            %EXTRACTANDCONVERT Single column extraction (kept for compatibility)
-            
-            if columnIndex > size(dataRows, 2)
-                obj.logger.logWarning(sprintf('Column %d not found, using NaN', columnIndex));
-                values = NaN(height(dataRows), 1);
-                return;
-            end
-            
-            rawData = dataRows{:, columnIndex};
-            numericData = obj.convertToNumeric(rawData);
-            values = obj.applyUnitConversion(numericData, paramType);
         end
         
         function convertedData = applyUnitConversion(obj, rawData, paramType)
@@ -363,22 +481,13 @@ classdef NanionDataExtractor < handle
             
             switch lower(paramType)
                 case 'seriesr'
-                    convertedData = rawData / 1e6;  % Ω → MΩ
-                    
+                    convertedData = rawData / 1e6;
                 case 'sealr'
-                    convertedData = rawData / 1e9;  % Ω → GΩ
-                    
+                    convertedData = rawData / 1e9;
                 case 'capacitance'
-                    if all(rawData == 0 | isnan(rawData), 'all')
-                        obj.logger.logWarning('Capacitance values all zero/NaN');
-                        convertedData = rawData;
-                    else
-                        convertedData = rawData * 1e12;  % F → pF
-                    end
-                    
+                    convertedData = rawData * 1e12;
                 case 'current'
-                    convertedData = rawData * 1e12;  % A → pA
-                    
+                    convertedData = rawData * 1e12;
                 otherwise
                     convertedData = rawData;
             end
@@ -407,51 +516,37 @@ classdef NanionDataExtractor < handle
         end
         
         function [passed, ivUsed] = assessWellQuality(obj, iv1Data, iv2Data, wellIdx, filters, hasIV2)
-            %ASSESSWELLQUALITY Robust median-based quality check with IV2 fallback
-            %   Uses MEDIAN across 23 sweeps (resistant to outlier spikes)
-            %   Optionally checks if max is wildly divergent from median
+            %ASSESSWELLQUALITY Robust median-based quality check
             
-            % Get outlier threshold from config (default: 2.0 = max can be 2x median)
             if isfield(filters, 'outlierThreshold')
                 outlierThreshold = filters.outlierThreshold;
             else
-                outlierThreshold = 2.0;  % Default: max > 2 × median is considered outlier
+                outlierThreshold = 2.0;
             end
             
-            % Extract ALL sweeps for this well from IV1 (1 × 23 arrays)
             iv1SeriesR = iv1Data.seriesResistance(wellIdx, :);
             iv1SealR = iv1Data.sealResistance(wellIdx, :);
             iv1Cap = iv1Data.capacitance(wellIdx, :);
             
-            % Check if we have enough valid data (at least 15 of 23 sweeps)
-            iv1SeriesRValid = sum(~isnan(iv1SeriesR));
-            iv1SealRValid = sum(~isnan(iv1SealR));
-            iv1CapValid = sum(~isnan(iv1Cap));
-            
-            minValidSweeps = 15;  % Require at least 15/23 valid sweeps
-            iv1HasData = (iv1SeriesRValid >= minValidSweeps) && ...
-                        (iv1SealRValid >= minValidSweeps) && ...
-                        (iv1CapValid >= minValidSweeps);
+            minValidSweeps = 15;
+            iv1HasData = (sum(~isnan(iv1SeriesR)) >= minValidSweeps) && ...
+                        (sum(~isnan(iv1SealR)) >= minValidSweeps) && ...
+                        (sum(~isnan(iv1Cap)) >= minValidSweeps);
             
             if iv1HasData
-                % Calculate medians (robust to outliers)
                 iv1SeriesRMedian = median(iv1SeriesR, 'omitnan');
                 iv1SealRMedian = median(iv1SealR, 'omitnan');
                 iv1CapMedian = median(iv1Cap, 'omitnan');
                 
-                % Main quality check: median must be below threshold
                 medianPasses = (iv1SeriesRMedian <= filters.maxSeriesResistance) && ...
                               (iv1SealRMedian <= filters.maxSealResistance) && ...
                               (iv1CapMedian <= filters.maxCapacitance);
                 
                 if medianPasses
-                    % Optional: Check if max is not wildly divergent
-                    % (This catches systematic problems vs single spike artifacts)
                     iv1SeriesRMax = max(iv1SeriesR, [], 'omitnan');
                     iv1SealRMax = max(iv1SealR, [], 'omitnan');
                     iv1CapMax = max(iv1Cap, [], 'omitnan');
                     
-                    % Fail if max is absurdly high (e.g., max > median × outlierThreshold)
                     outlierCheck = (iv1SeriesRMax <= iv1SeriesRMedian * outlierThreshold) && ...
                                   (iv1SealRMax <= iv1SealRMedian * outlierThreshold) && ...
                                   (iv1CapMax <= iv1CapMedian * outlierThreshold);
@@ -464,19 +559,14 @@ classdef NanionDataExtractor < handle
                 end
             end
             
-            % Try IV2 fallback if available
             if hasIV2 && ~isempty(iv2Data)
                 iv2SeriesR = iv2Data.seriesResistance(wellIdx, :);
                 iv2SealR = iv2Data.sealResistance(wellIdx, :);
                 iv2Cap = iv2Data.capacitance(wellIdx, :);
                 
-                iv2SeriesRValid = sum(~isnan(iv2SeriesR));
-                iv2SealRValid = sum(~isnan(iv2SealR));
-                iv2CapValid = sum(~isnan(iv2Cap));
-                
-                iv2HasData = (iv2SeriesRValid >= minValidSweeps) && ...
-                            (iv2SealRValid >= minValidSweeps) && ...
-                            (iv2CapValid >= minValidSweeps);
+                iv2HasData = (sum(~isnan(iv2SeriesR)) >= minValidSweeps) && ...
+                            (sum(~isnan(iv2SealR)) >= minValidSweeps) && ...
+                            (sum(~isnan(iv2Cap)) >= minValidSweeps);
                 
                 if iv2HasData
                     iv2SeriesRMedian = median(iv2SeriesR, 'omitnan');
@@ -505,25 +595,17 @@ classdef NanionDataExtractor < handle
                 end
             end
             
-            % Both IVs failed
             passed = false;
-            if iv1HasData
-                ivUsed = 'iv1_threshold_fail';
-            elseif hasIV2 && ~isempty(iv2Data) && sum(~isnan(iv2Data.seriesResistance(wellIdx, :))) >= minValidSweeps
-                ivUsed = 'iv2_threshold_fail';
-            else
-                ivUsed = 'insufficient_data';
-            end
+            ivUsed = 'insufficient_data';
         end
         
         function filterReport = createIVFallbackFilterReport(obj, wellIDs, measurements, ...
                 qualityMask, ivUsedForFiltering, filters, hasIV2)
-            %CREATEIVFALLBACKFILTERREPORT Generate filter report for median-based filtering
+            %CREATEIVFALLBACKFILTERREPORT Generate filter report
             
             numWells = length(wellIDs);
             iv1Data = measurements.iv1;
             
-            % Count IV usage
             iv1Used = sum(ivUsedForFiltering == "iv1");
             if hasIV2
                 iv2Used = sum(ivUsedForFiltering == "iv2");
@@ -531,48 +613,17 @@ classdef NanionDataExtractor < handle
                 iv2Used = 0;
             end
             
-            % Calculate statistics for reporting (using median-based approach)
             minValidSweeps = 15;
             
-            % Count wells with insufficient data
-            iv1SeriesRInsufficient = sum(sum(~isnan(iv1Data.seriesResistance), 2) < minValidSweeps);
-            iv1SealRInsufficient = sum(sum(~isnan(iv1Data.sealResistance), 2) < minValidSweeps);
-            iv1CapInsufficient = sum(sum(~isnan(iv1Data.capacitance), 2) < minValidSweeps);
-            
-            % Count wells where median exceeds threshold
             iv1SeriesRMedians = median(iv1Data.seriesResistance, 2, 'omitnan');
             iv1SealRMedians = median(iv1Data.sealResistance, 2, 'omitnan');
             iv1CapMedians = median(iv1Data.capacitance, 2, 'omitnan');
-            
-            iv1SeriesRMedianFail = sum(iv1SeriesRMedians > filters.maxSeriesResistance);
-            iv1SealRMedianFail = sum(iv1SealRMedians > filters.maxSealResistance);
-            iv1CapMedianFail = sum(iv1CapMedians > filters.maxCapacitance);
-            
-            % Count wells with valid data
-            iv1SeriesRValid = sum(sum(~isnan(iv1Data.seriesResistance), 2) >= minValidSweeps);
-            iv1SealRValid = sum(sum(~isnan(iv1Data.sealResistance), 2) >= minValidSweeps);
-            iv1CapValid = sum(sum(~isnan(iv1Data.capacitance), 2) >= minValidSweeps);
             
             filterReport = struct(...
                 'totalWells', numWells, ...
                 'passedWells', sum(qualityMask), ...
                 'failedWells', sum(~qualityMask), ...
-                'ivUsage', struct(...
-                    'iv1Used', iv1Used, ...
-                    'iv2Used', iv2Used, ...
-                    'iv2Available', hasIV2), ...
-                'insufficientData', struct(...
-                    'seriesR', struct('count', iv1SeriesRInsufficient), ...
-                    'sealR', struct('count', iv1SealRInsufficient), ...
-                    'capacitance', struct('count', iv1CapInsufficient)), ...
-                'medianThresholdFailures', struct(...
-                    'seriesR', struct('count', iv1SeriesRMedianFail, 'threshold', filters.maxSeriesResistance), ...
-                    'sealR', struct('count', iv1SealRMedianFail, 'threshold', filters.maxSealResistance), ...
-                    'capacitance', struct('count', iv1CapMedianFail, 'threshold', filters.maxCapacitance)), ...
-                'validDataCounts', struct(...
-                    'seriesR', iv1SeriesRValid, ...
-                    'sealR', iv1SealRValid, ...
-                    'capacitance', iv1CapValid));
+                'ivUsage', struct('iv1Used', iv1Used, 'iv2Used', iv2Used));
         end
         
         function logIVFallbackFilteringResults(obj, filterReport, hasIV2)
@@ -583,38 +634,13 @@ classdef NanionDataExtractor < handle
                 100 * filterReport.passedWells / filterReport.totalWells));
             
             if hasIV2
-                obj.logger.logInfo('--- IV Usage for Quality Assessment ---');
-                obj.logger.logInfo(sprintf('IV1 used: %d wells (%.1f%%)', ...
-                    filterReport.ivUsage.iv1Used, ...
-                    100 * filterReport.ivUsage.iv1Used / filterReport.totalWells));
-                obj.logger.logInfo(sprintf('IV2 fallback: %d wells (%.1f%%)', ...
-                    filterReport.ivUsage.iv2Used, ...
-                    100 * filterReport.ivUsage.iv2Used / filterReport.totalWells));
+                obj.logger.logInfo(sprintf('IV1 used: %d, IV2 fallback: %d', ...
+                    filterReport.ivUsage.iv1Used, filterReport.ivUsage.iv2Used));
             end
-            
-            obj.logger.logInfo('--- Insufficient Data (<15 valid sweeps) ---');
-            obj.logger.logInfo(sprintf('Series R: %d wells', filterReport.insufficientData.seriesR.count));
-            obj.logger.logInfo(sprintf('Seal R: %d wells', filterReport.insufficientData.sealR.count));
-            obj.logger.logInfo(sprintf('Capacitance: %d wells', filterReport.insufficientData.capacitance.count));
-            
-            obj.logger.logInfo('--- Median Threshold Exceedances ---');
-            obj.logger.logInfo(sprintf('Series R median > %.1f MΩ: %d/%d wells', ...
-                filterReport.medianThresholdFailures.seriesR.threshold, ...
-                filterReport.medianThresholdFailures.seriesR.count, ...
-                filterReport.validDataCounts.seriesR));
-            obj.logger.logInfo(sprintf('Seal R median > %.1f GΩ: %d/%d wells', ...
-                filterReport.medianThresholdFailures.sealR.threshold, ...
-                filterReport.medianThresholdFailures.sealR.count, ...
-                filterReport.validDataCounts.sealR));
-            obj.logger.logInfo(sprintf('Capacitance median > %.1f pF: %d/%d wells', ...
-                filterReport.medianThresholdFailures.capacitance.threshold, ...
-                filterReport.medianThresholdFailures.capacitance.count, ...
-                filterReport.validDataCounts.capacitance));
         end
         
         function filteredMeasurements = applyFilterMask(obj, measurements, qualityMask)
             %APPLYFILTERMASK Apply quality mask to all IVs
-            %   UPDATED: Handles [wells × 23] arrays
             
             filteredMeasurements = struct();
             ivFields = fieldnames(measurements);
@@ -626,8 +652,14 @@ classdef NanionDataExtractor < handle
                 paramFields = fieldnames(ivData);
                 for j = 1:length(paramFields)
                     paramName = paramFields{j};
-                    % Apply mask to rows (first dimension)
-                    filteredMeasurements.(ivName).(paramName) = ivData.(paramName)(qualityMask, :);
+                    data = ivData.(paramName);
+                    
+                    % Handle both 2D arrays [wells × sweeps] and 1D arrays [wells × 1]
+                    if size(data, 1) == length(qualityMask)
+                        filteredMeasurements.(ivName).(paramName) = data(qualityMask, :);
+                    else
+                        filteredMeasurements.(ivName).(paramName) = data;
+                    end
                 end
             end
         end
