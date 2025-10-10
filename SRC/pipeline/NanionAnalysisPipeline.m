@@ -65,7 +65,7 @@ classdef NanionAnalysisPipeline < handle
                 obj.exportSummaryTables(results, outputDir);
                 
                 % Phase 4: Generate summary report
-                obj.generateSummaryReport(results, outputDir);
+                %obj.generateSummaryReport(results, outputDir);
                 
                 obj.logger.logInfo('✓ Analysis pipeline completed successfully');
                 
@@ -237,9 +237,9 @@ classdef NanionAnalysisPipeline < handle
         end
 
         function exportSummaryTables(obj, results, outputDir)
-            %EXPORTSUMMARYTABLES Export all summary tables with grouping
+            %EXPORTSUMMARYTABLES Export comprehensive XLSX workbooks
             
-            obj.logger.logInfo('=== EXPORTING SUMMARY TABLES ===');
+            obj.logger.logInfo('=== EXPORTING COMPREHENSIVE WORKBOOKS ===');
             
             % Filter successful results
             successfulResults = results(cellfun(@(x) strcmp(x.status, 'success'), results));
@@ -249,27 +249,27 @@ classdef NanionAnalysisPipeline < handle
                 return;
             end
             
-            % Extract summary tables and file names
+            % Extract data for export
             summaryTables = cellfun(@(x) x.summaryTable, successfulResults, 'UniformOutput', false);
+            filteredDataArray = cellfun(@(x) x.filteredData, successfulResults, 'UniformOutput', false);
+            fittedDataArray = cellfun(@(x) x.fittedData, successfulResults, 'UniformOutput', false);
             fileNames = cellfun(@(x) x.fileName, successfulResults, 'UniformOutput', false);
             
-            % Create exporter
-            exporter = NanionMetadataExporter(obj.config, obj.logger);
+            % Create new XLSX exporter
+            exporter = NanionXLSXExporter(obj.config, obj.logger);
             
-            % Export individual and aggregated tables
+            % Export workbooks
             if length(summaryTables) == 1
-                % Single file
-                outputPath = exporter.exportSummaryTable(summaryTables{1}, outputDir, fileNames{1});
+                % Single file - comprehensive workbook
+                outputPath = exporter.exportSummaryTable(summaryTables{1}, filteredDataArray{1}, ...
+                    fittedDataArray{1}, outputDir, fileNames{1});
             else
-                % Multiple files
-                outputPath = exporter.exportMultipleFiles(summaryTables, outputDir, fileNames);
-                
-                % Also export grouped summaries
-                aggregatedTable = vertcat(summaryTables{:});
-                exporter.exportGroupedSummaries(aggregatedTable, outputPath);
+                % Multiple files - individual + aggregated workbooks
+                outputPath = exporter.exportMultipleFiles(summaryTables, filteredDataArray, ...
+                    fittedDataArray, outputDir, fileNames);
             end
             
-            obj.logger.logInfo(sprintf('✓ Summary tables exported to: %s', outputPath));
+            obj.logger.logInfo(sprintf('✓ Comprehensive workbooks exported to: %s', outputPath));
         end
 
         function generateSummaryReport(obj, results, outputDir)
@@ -336,8 +336,8 @@ classdef NanionAnalysisPipeline < handle
                 'BoltzmannModel', 'fitting', ...
                 'FitQualityAssessor', 'fitting', ...
                 'NanionBoltzmannPlotter', 'plotting', ...
-                'NanionSummaryTableBuilder', 'io', ...
-                'NanionMetadataExporter', 'io');
+                'NanionSummaryTableBuilder', 'analysis', ...
+                'NanionXLSXExporter', 'io');
             
             componentNames = fieldnames(requiredComponents);
             missingComponents = {};

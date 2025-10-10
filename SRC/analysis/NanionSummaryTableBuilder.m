@@ -1,7 +1,7 @@
 classdef NanionSummaryTableBuilder < handle
     %NANIONSUMMARYTABLEBUILDER Build comprehensive summary tables
     %   Creates one row per well PER IV with ~45 columns
-    %   Combines filteredData, fittedData, and metadata
+    %   FIX: populateRow now returns modified rowData
     
     properties (Access = private)
         config
@@ -16,12 +16,6 @@ classdef NanionSummaryTableBuilder < handle
         
         function summaryTable = buildSummaryTable(obj, filteredData, fittedData, fileName)
             %BUILDSUMMARYTABLE Create comprehensive one-row-per-well-per-IV table
-            %   Inputs:
-            %     filteredData - from NanionDataExtractor after filtering + statistics
-            %     fittedData - from NanionBoltzmannFitter
-            %     fileName - original Excel file name
-            %   Output:
-            %     summaryTable - MATLAB table with ~45 columns
             
             obj.logger.logInfo('Building summary table (one row per well per IV)...');
             
@@ -31,13 +25,10 @@ classdef NanionSummaryTableBuilder < handle
             ivFields = fieldnames(measurements);
             numIVs = length(ivFields);
             
-            % Pre-allocate cell arrays for all columns
             totalRows = numWells * numIVs;
-            
-            % Initialize all column arrays
             rowData = obj.initializeColumns(totalRows, protocolType);
             
-            % Populate table row by row
+            % FIX: Capture returned rowData from populateRow
             rowIdx = 0;
             for wellIdx = 1:numWells
                 wellID = filteredData.wellIDs(wellIdx);
@@ -49,15 +40,12 @@ classdef NanionSummaryTableBuilder < handle
                     ivName = ivFields{ivIdx};
                     ivNumber = ivIdx;
                     
-                    % Extract data for this well and IV
                     ivData = measurements.(ivName);
                     stats = ivData.statistics;
-                    
-                    % Get Boltzmann fit parameters
                     fitParams = obj.extractFitParams(fittedData, wellIdx, ivName);
                     
-                    % Populate row
-                    obj.populateRow(rowData, rowIdx, ...
+                    % FIX: Capture returned rowData
+                    rowData = obj.populateRow(rowData, rowIdx, ...
                         wellID, fileName, protocolType, ivNumber, ...
                         cellType, cellConc, ...
                         ivData.compound(wellIdx), ivData.concentration(wellIdx), ...
@@ -66,7 +54,6 @@ classdef NanionSummaryTableBuilder < handle
                 end
             end
             
-            % Convert to MATLAB table
             summaryTable = obj.createTable(rowData, protocolType);
             
             obj.logger.logInfo(sprintf('✓ Summary table created: %d rows × %d columns', ...
@@ -134,7 +121,7 @@ classdef NanionSummaryTableBuilder < handle
             rowData.R_squared = zeros(totalRows, 1);
             rowData.RMSE = zeros(totalRows, 1);
             rowData.Fit_Quality = cell(totalRows, 1);
-            rowData.Fit_Converged = zeros(totalRows, 1);  % TRUE/FALSE as 1/0
+            rowData.Fit_Converged = zeros(totalRows, 1);
             
             % 6. Protocol Parameters (3 columns)
             rowData.Temperature_C = zeros(totalRows, 1);
@@ -142,22 +129,12 @@ classdef NanionSummaryTableBuilder < handle
             rowData.Num_Voltage_Steps = zeros(totalRows, 1);
         end
         
-        function populateRow(obj, rowData, rowIdx, ...
+        function rowData = populateRow(obj, rowData, rowIdx, ...
                 wellID, fileName, protocolType, ivNumber, ...
                 cellType, cellConc, compound, concentration, ...
                 stats, fitParams, wellIdx, protocolInfo)
             %POPULATEROW Fill in data for one row
-            
-            % DEBUG: Log first row to verify data structure
-            if rowIdx == 1
-                obj.logger.logDebug(sprintf('DEBUG: First row population - wellIdx=%d, ivNumber=%d', wellIdx, ivNumber));
-                if isfield(stats, 'seriesR') && isfield(stats.seriesR, 'mean')
-                    obj.logger.logDebug(sprintf('  Series R mean size: [%d × %d], value at index %d: %.3f', ...
-                        size(stats.seriesR.mean, 1), size(stats.seriesR.mean, 2), wellIdx, stats.seriesR.mean(wellIdx)));
-                else
-                    obj.logger.logWarning('  WARNING: stats.seriesR.mean not found!');
-                end
-            end
+            % FIX: Now returns modified rowData
             
             % 1. Identification
             rowData.Well_ID{rowIdx} = char(wellID);
@@ -170,7 +147,6 @@ classdef NanionSummaryTableBuilder < handle
             rowData.Concentration_uM(rowIdx) = concentration;
             
             % 2. Quality Metrics Statistics
-            % FIX: stats arrays are [numWells × 1], indexed directly by wellIdx
             rowData.Series_R_Mean_MOhm(rowIdx) = obj.safeExtract(stats.seriesR.mean, wellIdx);
             rowData.Series_R_Min_MOhm(rowIdx) = obj.safeExtract(stats.seriesR.min, wellIdx);
             rowData.Series_R_Max_MOhm(rowIdx) = obj.safeExtract(stats.seriesR.max, wellIdx);
@@ -211,7 +187,6 @@ classdef NanionSummaryTableBuilder < handle
                     rowData.Conductance_Raw_Range_nS(rowIdx) = NaN;
                 end
                 
-                % Normalized conductance at extremes (placeholder for now)
                 rowData.Conductance_Normalized_at_Vmax(rowIdx) = NaN;
                 rowData.Conductance_Normalized_at_Vmin(rowIdx) = NaN;
             end
@@ -259,7 +234,6 @@ classdef NanionSummaryTableBuilder < handle
             
             well = fittedData.wells(wellIdx);
             
-            % Extract IV-specific fit (iv1, iv2, etc.)
             if strcmp(ivName, 'iv1') && ~isempty(well.iv1)
                 ivFit = well.iv1;
             elseif strcmp(ivName, 'iv2') && ~isempty(well.iv2)
@@ -273,7 +247,6 @@ classdef NanionSummaryTableBuilder < handle
                 return;
             end
             
-            % Package fit parameters with quality
             fitParams = ivFit.fitParams;
             fitParams.quality = ivFit.fitQuality;
         end
@@ -281,11 +254,9 @@ classdef NanionSummaryTableBuilder < handle
         function summaryTable = createTable(obj, rowData, protocolType)
             %CREATETABLE Convert struct of arrays to MATLAB table
             
-            % Convert to table
             if strcmp(protocolType, 'activation')
                 summaryTable = struct2table(rowData);
             else
-                % Inactivation: remove conductance columns
                 conductanceFields = {'Conductance_Raw_Min_nS', 'Conductance_Raw_Max_nS', ...
                     'Conductance_Raw_Range_nS', 'Conductance_Raw_Mean_nS', ...
                     'Conductance_Normalized_at_Vmax', 'Conductance_Normalized_at_Vmin'};
@@ -299,7 +270,6 @@ classdef NanionSummaryTableBuilder < handle
                 summaryTable = struct2table(rowData);
             end
             
-            % Convert logical to categorical for better Excel export
             if ismember('Fit_Converged', summaryTable.Properties.VariableNames)
                 summaryTable.Fit_Converged = categorical(summaryTable.Fit_Converged, [0 1], {'FALSE', 'TRUE'});
             end
@@ -307,17 +277,12 @@ classdef NanionSummaryTableBuilder < handle
         
         function value = safeExtract(obj, array, index)
             %SAFEEXTRACT Safely extract value from array with bounds checking
-            %   Returns NaN if index out of bounds or array is empty/invalid
             
             try
                 if isempty(array) || index < 1 || index > numel(array)
                     value = NaN;
                 else
                     value = array(index);
-                    % If extracted value is NaN or Inf, keep it as-is
-                    if ~isfinite(value)
-                        % Already NaN or Inf, no change needed
-                    end
                 end
             catch
                 value = NaN;
