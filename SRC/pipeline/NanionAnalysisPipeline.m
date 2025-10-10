@@ -1,6 +1,6 @@
 classdef NanionAnalysisPipeline < handle
     %NANIONANALYSISPIPELINE Main controller for electrophysiology analysis
-    %   UPDATED: Added Step 5 for statistics calculation and metadata export
+    %   UPDATED: Uses NanionXLSXExporter for comprehensive workbook export
     
     properties (Access = public)
         config
@@ -61,11 +61,8 @@ classdef NanionAnalysisPipeline < handle
                     results = obj.processFilesSequential(validatedFiles, outputDir);
                 end
                 
-                % Phase 3: Export summary tables
+                % Phase 3: Export comprehensive XLSX workbooks
                 obj.exportSummaryTables(results, outputDir);
-                
-                % Phase 4: Generate summary report
-                %obj.generateSummaryReport(results, outputDir);
                 
                 obj.logger.logInfo('✓ Analysis pipeline completed successfully');
                 
@@ -181,9 +178,9 @@ classdef NanionAnalysisPipeline < handle
                 obj.logger.logInfo('Step 1: Reading and parsing data...');
                 rawData = obj.ioManager.readFile(fileInfo.path);
                 parsedData = obj.ioManager.parseData(rawData, fileInfo.protocol);
-                parsedData.fileName = fileInfo.name;  % Store file name
+                parsedData.fileName = fileInfo.name;
                 
-                % Step 2: Extract measurements (now includes current density & metadata)
+                % Step 2: Extract measurements
                 obj.logger.logInfo('Step 2: Extracting measurements...');
                 extractedData = obj.dataExtractor.extractMeasurements(parsedData);
                 
@@ -255,7 +252,7 @@ classdef NanionAnalysisPipeline < handle
             fittedDataArray = cellfun(@(x) x.fittedData, successfulResults, 'UniformOutput', false);
             fileNames = cellfun(@(x) x.fileName, successfulResults, 'UniformOutput', false);
             
-            % Create new XLSX exporter
+            % Create XLSX exporter
             exporter = NanionXLSXExporter(obj.config, obj.logger);
             
             % Export workbooks
@@ -270,36 +267,6 @@ classdef NanionAnalysisPipeline < handle
             end
             
             obj.logger.logInfo(sprintf('✓ Comprehensive workbooks exported to: %s', outputPath));
-        end
-
-        function generateSummaryReport(obj, results, outputDir)
-            successCount = sum(cellfun(@(x) strcmp(x.status, 'success'), results));
-            totalCount = length(results);
-            
-            summaryFile = fullfile(outputDir, 'analysis_summary.txt');
-            
-            fid = fopen(summaryFile, 'w');
-            if fid > 0
-                fprintf(fid, '=== NANION ANALYSIS SUMMARY ===\n');
-                fprintf(fid, 'Date: %s\n', datestr(now));
-                fprintf(fid, 'Total files: %d\n', totalCount);
-                fprintf(fid, 'Successful: %d\n', successCount);
-                fprintf(fid, 'Failed: %d\n', totalCount - successCount);
-                fprintf(fid, 'Success rate: %.1f%%\n', 100 * successCount / totalCount);
-                fprintf(fid, '\n--- FILE DETAILS ---\n');
-                
-                for i = 1:length(results)
-                    if strcmp(results{i}.status, 'success')
-                        fprintf(fid, '✓ %s\n', results{i}.fileName);
-                    else
-                        fprintf(fid, '✗ %s: %s\n', results{i}.fileName, results{i}.error);
-                    end
-                end
-                
-                fclose(fid);
-            end
-            
-            obj.logger.logInfo(sprintf('Summary report saved: %s', summaryFile));
         end
     end
     
@@ -336,6 +303,7 @@ classdef NanionAnalysisPipeline < handle
                 'BoltzmannModel', 'fitting', ...
                 'FitQualityAssessor', 'fitting', ...
                 'NanionBoltzmannPlotter', 'plotting', ...
+                'NanionSummaryFigure', 'plotting', ...
                 'NanionSummaryTableBuilder', 'analysis', ...
                 'NanionXLSXExporter', 'io');
             
