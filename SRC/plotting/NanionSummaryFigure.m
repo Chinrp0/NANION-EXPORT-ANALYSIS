@@ -6,7 +6,6 @@ classdef NanionSummaryFigure < handle
     properties (Access = private)
         config
         logger
-        plotter  % NanionBoltzmannPlotter instance
         compoundColors
         concentrationStyles
     end
@@ -15,9 +14,6 @@ classdef NanionSummaryFigure < handle
         function obj = NanionSummaryFigure(config, logger)
             obj.config = config;
             obj.logger = logger;
-            
-            % Initialize plotter for representative wells
-            obj.plotter = NanionBoltzmannPlotter(config, logger);
             
             % Define compound color palette (colorblind-friendly)
             obj.compoundColors = [
@@ -79,6 +75,7 @@ classdef NanionSummaryFigure < handle
         function figHandle = createRepresentativeWellsFigure(obj, filteredData, fittedData, summaryTable)
             %CREATEREPRESENTATIVEWELLSFIGURE Best and worst passing fits
             %   Uses NanionBoltzmannPlotter dual-axis format
+            %   With shared legend in 7th subplot
             
             obj.logger.logInfo('Creating representative wells figure...');
             
@@ -91,24 +88,45 @@ classdef NanionSummaryFigure < handle
             numBest = min(3, height(bestWells));
             numWorst = min(3, height(worstWells));
             
-            % Create figure (2 rows × 3 columns)
-            figHandle = figure('Position', [100, 100, 1500, 900], ...
+            % Create figure (2 rows × 4 columns, last column for shared legend)
+            figHandle = figure('Position', [100, 100, 1800, 900], ...
                 'Color', 'w', 'Name', 'Representative Wells');
+            
+            % Storage for legend handles/labels (from first well)
+            sharedLegendHandles = [];
+            sharedLegendLabels = {};
             
             % Row 1: Best fits
             obj.logger.logInfo(sprintf('Plotting %d best fits...', numBest));
             for i = 1:numBest
-                subplot(2, 3, i);
-                obj.plotRepresentativeWell(filteredData, fittedData, bestWells(i, :), ...
-                    voltages, protocolType, 'Best');
+                subplot(2, 4, i);
+                [h, l] = obj.plotRepresentativeWell(filteredData, fittedData, bestWells(i, :), ...
+                    voltages, protocolType, 'Best', false);  % false = no legend
+                
+                % Capture legend from first well
+                if i == 1
+                    sharedLegendHandles = h;
+                    sharedLegendLabels = l;
+                end
             end
             
             % Row 2: Worst passing fits
             obj.logger.logInfo(sprintf('Plotting %d worst passing fits...', numWorst));
             for i = 1:numWorst
-                subplot(2, 3, 3 + i);
+                subplot(2, 4, 4 + i);
                 obj.plotRepresentativeWell(filteredData, fittedData, worstWells(i, :), ...
-                    voltages, protocolType, 'Acceptable');
+                    voltages, protocolType, 'Acceptable', false);  % false = no legend
+            end
+            
+            % Create shared legend in position 4 (top right)
+            subplot(2, 4, 4);
+            axis off;
+            if ~isempty(sharedLegendHandles)
+                legend(sharedLegendHandles, sharedLegendLabels, ...
+                    'Location', 'center', ...
+                    'FontSize', 9, ...
+                    'Box', 'on');
+                title('Legend', 'FontSize', 11, 'FontWeight', 'bold', 'Visible', 'on');
             end
             
             % Add overall title
@@ -249,11 +267,16 @@ classdef NanionSummaryFigure < handle
                 height(bestWells), height(worstWells)));
         end
         
-        function plotRepresentativeWell(obj, filteredData, fittedData, wellRow, ...
-                voltages, protocolType, category)
+        function [legendHandles, legendLabels] = plotRepresentativeWell(obj, filteredData, fittedData, wellRow, ...
+                voltages, protocolType, category, showLegend)
             %PLOTREPRESENTATIVEWELL Plot using NanionBoltzmannPlotter format
             %   Dual y-axis: Conductance (left) + Current (right)
             %   Shows ALL available IVs (iv1, iv2, iv3, iv4)
+            %   Returns legend handles and labels
+            
+            if nargin < 8
+                showLegend = true;  % Default: show legend
+            end
             
             % Extract well info
             wellID = wellRow.Well_ID{1};
@@ -264,6 +287,8 @@ classdef NanionSummaryFigure < handle
             
             if isempty(wellIdx)
                 text(0.5, 0.5, 'Well not found', 'HorizontalAlignment', 'center');
+                legendHandles = [];
+                legendLabels = {};
                 return;
             end
             
@@ -292,15 +317,20 @@ classdef NanionSummaryFigure < handle
             end
             
             % Plot using dual-axis format with all IVs
-            obj.plotDualAxisFormatMultiIV(wellID, voltages, ivDataArray, ivFitArray, ...
-                ivNames, category, r2, protocolType);
+            [legendHandles, legendLabels] = obj.plotDualAxisFormatMultiIV(wellID, voltages, ivDataArray, ivFitArray, ...
+                ivNames, category, r2, protocolType, showLegend);
         end
         
-        function plotDualAxisFormatMultiIV(obj, wellID, voltages, ivDataArray, ivFitArray, ...
-                ivNames, category, r2, protocolType)
+        function [legendHandles, legendLabels] = plotDualAxisFormatMultiIV(obj, wellID, voltages, ivDataArray, ivFitArray, ...
+                ivNames, category, r2, protocolType, showLegend)
             %PLOTDUALAXISFORMATMULTIIV Replicate NanionBoltzmannPlotter style for multiple IVs
             %   Left axis: Conductance, Right axis: Current
             %   Handles iv1, iv2, iv3, iv4 dynamically
+            %   Returns legend handles and labels
+            
+            if nargin < 10
+                showLegend = true;
+            end
             
             markerSize = 5;
             lineWidth = 1.8;
@@ -323,6 +353,10 @@ classdef NanionSummaryFigure < handle
             ];
             
             numIVs = length(ivDataArray);
+            
+            % Storage for legend
+            legendHandles = [];
+            legendLabels = {};
             
             %% LEFT Y-AXIS: Normalized Conductance (0-1)
             yyaxis left
@@ -349,19 +383,31 @@ classdef NanionSummaryFigure < handle
                     'DisplayName', sprintf('%s Conductance', upper(ivNames{i})));
                 h_cond.Color(4) = markerAlpha;
                 
+                legendHandles = [legendHandles; h_cond];
+                legendLabels = [legendLabels; {sprintf('%s Conductance', upper(ivNames{i}))}];
+                
                 % Plot fit
                 if ~isempty(ivFit) && isfield(ivFit, 'fittedCurve')
                     fitColor = condColor;
                     fitColor(4) = 0.7;
-                    plot(voltages, ivFit.fittedCurve, ':', ...
+                    h_fit = plot(voltages, ivFit.fittedCurve, ':', ...
                         'Color', fitColor, ...
                         'LineWidth', fitLineWidth, ...
                         'DisplayName', sprintf('%s Fit (V_{1/2}=%.1f)', ...
                             upper(ivNames{i}), ivFit.fitParams.V_mid));
+                    
+                    legendHandles = [legendHandles; h_fit];
+                    legendLabels = [legendLabels; {sprintf('%s Fit (V_{1/2}=%.1f)', ...
+                        upper(ivNames{i}), ivFit.fitParams.V_mid)}];
+                else
+                    % No fit available - indicate in legend
+                    if i <= 2  % Only mention missing fits for IV1/IV2 (unexpected)
+                        obj.logger.logDebug(sprintf('No fit available for %s', upper(ivNames{i})));
+                    end
                 end
             end
             
-            ylabel('Normalized Conductance (G/G_{max})', 'FontSize', 11, 'FontWeight', 'bold');
+            ylabel('G/G_{max}', 'FontSize', 11, 'FontWeight', 'bold');
             ax = gca;
             ax.YColor = [0, 0, 0];
             ylim([0, 1.1]);
@@ -389,6 +435,9 @@ classdef NanionSummaryFigure < handle
                     'LineWidth', lineWidth, ...
                     'DisplayName', sprintf('%s Current', upper(ivNames{i})));
                 h_current.Color(4) = markerAlpha;
+                
+                legendHandles = [legendHandles; h_current];
+                legendLabels = [legendLabels; {sprintf('%s Current', upper(ivNames{i}))}];
             end
             
             ylabel('Peak Current (pA)', 'FontSize', 11, 'FontWeight', 'bold');
@@ -411,7 +460,9 @@ classdef NanionSummaryFigure < handle
             ax.Box = 'on';
             ax.LineWidth = 1.2;
             
-            legend('Location', 'northwest', 'FontSize', 7, 'Box', 'off', 'NumColumns', 1);
+            if showLegend
+                legend('Location', 'northwest', 'FontSize', 7, 'Box', 'off', 'NumColumns', 1);
+            end
             
             hold off;
         end
@@ -591,7 +642,7 @@ classdef NanionSummaryFigure < handle
             % Formatting
             xlabel('Voltage (mV)', 'FontSize', 10);
             if strcmp(protocolType, 'activation')
-                ylabel('Norm. Conductance (G/G_{max})', 'FontSize', 10);
+                ylabel('G/G_{max}', 'FontSize', 10);
             else
                 ylabel('Norm. Inactivation', 'FontSize', 10);
             end
@@ -684,9 +735,9 @@ classdef NanionSummaryFigure < handle
             % Turn off axes
             axis off;
             
-            % Create legend in center of subplot
+            % Create legend in this subplot (use 'best' instead of 'center')
             legend(handles, labels, ...
-                'Location', 'center', ...
+                'Location', 'northwest', ...
                 'FontSize', 9, ...
                 'Box', 'on', ...
                 'NumColumns', 1);
