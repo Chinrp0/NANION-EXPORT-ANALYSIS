@@ -1,345 +1,232 @@
-classdef NanionBoltzmannPlotter < handle
-    %NANIONBOLTZMANNPLOTTER Dual y-axis plotting for activation protocols
-    %   Left axis: Conductance (nS)
-    %   Right axis: Peak Current (pA)
-    %   Plots IV1 and IV2 with Boltzmann fits
+function plot_boltzmann_results()
+    %PLOT_BOLTZMANN_RESULTS Interactive script to visualize Boltzmann fitting results
+    %   Generates Figure 1 (Representative Wells) and Figure 2 (Cell Type Averages)
     
-    properties (Access = private)
-        config
-        logger
-        colors
+    fprintf('=== BOLTZMANN RESULTS PLOTTER ===\n\n');
+    
+    % Ask user for input method
+    choice = questdlg('Choose data source:', ...
+        'Boltzmann Plotter', ...
+        'Run New Analysis', 'Load Existing Results', 'Run New Analysis');
+    
+    switch choice
+        case 'Run New Analysis'
+            results = runNewAnalysis();
+        case 'Load Existing Results'
+            results = loadExistingResults();
+        otherwise
+            fprintf('Cancelled.\n');
+            return;
     end
     
-    methods
-        function obj = NanionBoltzmannPlotter(config, logger)
-            %NANIONBOLTZMANNPLOTTER Constructor
-            obj.config = config;
-            obj.logger = logger;
-            
-            % Define color scheme
-            obj.colors = struct(...
-                'iv1', [0.0, 0.0, 0.0], ...           % Black (conductance)
-                'iv1_current', [0.5, 0.5, 0.5], ...   % Gray (current)
-                'iv2', [0.0, 0.45, 0.74], ...         % Blue (conductance)
-                'iv2_current', [0.4, 0.7, 1.0]);      % Light blue (current)
-        end
-        
-        function plotActivationDualAxis(obj, wellID, voltages, iv1Data, iv2Data, iv1Fit, iv2Fit)
-            %PLOTACTIVATIONDUALAXIS Dual y-axis plot for activation protocols
-            %   Left axis: Conductance with Boltzmann fits
-            %   Right axis: Peak Current
-            %   Plots both IV1 and IV2 with connected lines
-            
-            figure('Name', sprintf('Well %s - Activation', wellID), ...
-                   'Position', [100, 100, 1000, 650], ...
-                   'Color', 'white');
-            
-            % Marker and line settings
-            markerSize = 5;           % Smaller markers
-            lineWidth = 1.8;          % Slightly thicker lines
-            fitLineWidth = 2.5;       % Thicker fit lines
-            markerAlpha = 0.85;       % Slight transparency for overlapping points
-            
-            %% LEFT Y-AXIS: Conductance (nS)
-            yyaxis left
-            hold on;
-            
-            % IV1 Conductance data (circles, filled, black)
-            h1_cond = plot(voltages, iv1Data.conductance, '-o', ...
-                'Color', obj.colors.iv1, ...
-                'MarkerSize', markerSize, ...
-                'MarkerFaceColor', obj.colors.iv1, ...
-                'LineWidth', lineWidth, ...
-                'DisplayName', 'IV1 Conductance');
-            h1_cond.Color(4) = markerAlpha;  % Set transparency
-            
-            % IV1 Boltzmann fit
-            if ~isempty(iv1Fit) && isfield(iv1Fit, 'fittedCurve')
-                fitColor1 = obj.colors.iv1;
-                fitColor1(4) = 0.7;  % Add transparency
-                plot(voltages, iv1Fit.fittedCurve, ':', ...
-                    'Color', fitColor1, ...
-                    'LineWidth', fitLineWidth, ...
-                    'DisplayName', sprintf('IV1 Fit (V_{1/2}=%.1f, k=%.1f)', ...
-                        iv1Fit.fitParams.V_mid, iv1Fit.fitParams.k));
-            end
-            
-            % IV2 Conductance data (circles, filled, blue)
-            if ~isempty(iv2Data)
-                h2_cond = plot(voltages, iv2Data.conductance, '-o', ...
-                    'Color', obj.colors.iv2, ...
-                    'MarkerSize', markerSize, ...
-                    'MarkerFaceColor', obj.colors.iv2, ...
-                    'LineWidth', lineWidth, ...
-                    'DisplayName', 'IV2 Conductance');
-                h2_cond.Color(4) = markerAlpha;  % Set transparency
-                
-                % IV2 Boltzmann fit
-                if ~isempty(iv2Fit) && isfield(iv2Fit, 'fittedCurve')
-                    fitColor2 = obj.colors.iv2;
-                    fitColor2(4) = 0.7;  % Add transparency
-                    plot(voltages, iv2Fit.fittedCurve, ':', ...
-                        'Color', fitColor2, ...
-                        'LineWidth', fitLineWidth, ...
-                        'DisplayName', sprintf('IV2 Fit (V_{1/2}=%.1f, k=%.1f)', ...
-                            iv2Fit.fitParams.V_mid, iv2Fit.fitParams.k));
-                end
-            end
-            
-            ylabel('Normalized Conductance (0-1)', 'FontSize', 12, 'FontWeight', 'bold');
-            ax = gca;
-            ax.YColor = [0, 0, 0];  % Black for left axis
-            ylim_left = ylim;
-            ylim([0, ylim_left(2) * 1.1]);  % Start at 0, add 10% headroom
-            
-            %% RIGHT Y-AXIS: Peak Current (pA)
-            yyaxis right
-            hold on;
-            
-            % IV1 Peak Current (gray squares, hollow)
-            h1_current = plot(voltages, iv1Data.peakCurrent, '-s', ...
-                'Color', obj.colors.iv1_current, ...
-                'MarkerSize', markerSize, ...
-                'MarkerFaceColor', 'none', ...
-                'LineWidth', lineWidth, ...
-                'DisplayName', 'IV1 Current');
-            h1_current.Color(4) = markerAlpha;  % Set transparency
-            
-            % IV2 Peak Current (light blue squares, hollow)
-            if ~isempty(iv2Data)
-                h2_current = plot(voltages, iv2Data.peakCurrent, '-s', ...
-                    'Color', obj.colors.iv2_current, ...
-                    'MarkerSize', markerSize, ...
-                    'MarkerFaceColor', 'none', ...
-                    'LineWidth', lineWidth, ...
-                    'DisplayName', 'IV2 Current');
-                h2_current.Color(4) = markerAlpha;  % Set transparency
-            end
-            
-            ylabel('Peak Current (pA)', 'FontSize', 12, 'FontWeight', 'bold');
-            ax = gca;
-            ax.YColor = [0, 0, 0];  % Black for right axis
-            
-            % Set y-limits to show negative current clearly
-            ylim_right = ylim;
-            ylim([ylim_right(1) * 1.1, 0]);  % Extend negative, cap at 0
-            
-            %% X-AXIS and FORMATTING
-            xlabel('Voltage (mV)', 'FontSize', 12, 'FontWeight', 'bold');
-            xlim([min(voltages) - 5, max(voltages) + 5]);
-            
-            % Title with fit quality (indicate normalized conductance)
-            if ~isempty(iv1Fit)
-                titleStr = sprintf('Well %s: Activation Protocol (IV1: R^2=%.3f)', ...
-                    wellID, iv1Fit.fitParams.R2);
-            else
-                titleStr = sprintf('Well %s: Activation Protocol', wellID);
-            end
-            title(titleStr, 'FontSize', 14, 'FontWeight', 'bold');
-            
-            % Grid and legend
-            grid on;
-            ax = gca;
-            ax.GridAlpha = 0.15;  % Subtle grid
-            ax.GridLineStyle = '-';
-            ax.MinorGridAlpha = 0.05;
-            ax.Box = 'on';
-            ax.LineWidth = 1.2;
-            
-            legend('Location', 'west', 'FontSize', 9, 'Box', 'off', ...
-                'NumColumns', 1);  % Single column, top-left position
-            
-            hold off;
-            
-            obj.logger.logInfo(sprintf('Plotted dual-axis activation for well %s', wellID));
-        end
-        
-        function plotInactivationDualAxis(obj, wellID, voltages, iv1Data, iv2Data, iv1Fit, iv2Fit)
-            %PLOTINACTIVATIONDUALAXIS Single plot with dual y-axis for inactivation
-            %   Left axis: Normalized inactivation (0-1) with Boltzmann fits
-            %   Right axis: Test pulse current (pA)
-            
-            figure('Name', sprintf('Well %s - Inactivation', wellID), ...
-                   'Position', [100, 100, 1000, 650], ...
-                   'Color', 'white');
-            
-            markerSize = 5;
-            lineWidth = 1.8;
-            fitLineWidth = 2.5;
-            markerAlpha = 0.85;
-            
-            %% LEFT Y-AXIS: Normalized Inactivation
-            yyaxis left
-            hold on;
-            
-            % IV1 Normalized Inactivation (black circles, filled)
-            iv1_norm = iv1Data.inactivationData / min(iv1Data.inactivationData);
-            h1_inact = plot(voltages, iv1_norm, '-o', ...
-                'Color', obj.colors.iv1, ...
-                'MarkerSize', markerSize, ...
-                'MarkerFaceColor', obj.colors.iv1, ...
-                'LineWidth', lineWidth, ...
-                'DisplayName', 'IV1 Inactivation');
-            h1_inact.Color(4) = markerAlpha;
-            
-            % IV1 Boltzmann Fit
-            if ~isempty(iv1Fit) && isfield(iv1Fit, 'fittedCurve')
-                fitColor1 = obj.colors.iv1;
-                fitColor1(4) = 0.7;  % Add transparency
-                plot(voltages, iv1Fit.fittedCurve, ':', ...
-                    'Color', fitColor1, ...
-                    'LineWidth', fitLineWidth, ...
-                    'DisplayName', sprintf('IV1 Fit (V_{1/2}=%.1f, k=%.1f)', ...
-                        iv1Fit.fitParams.V_mid, iv1Fit.fitParams.k));
-            end
-            
-            % IV2 Normalized Inactivation (blue circles, filled)
-            if ~isempty(iv2Data)
-                iv2_norm = iv2Data.inactivationData / min(iv2Data.inactivationData);
-                h2_inact = plot(voltages, iv2_norm, '-o', ...
-                    'Color', obj.colors.iv2, ...
-                    'MarkerSize', markerSize, ...
-                    'MarkerFaceColor', obj.colors.iv2, ...
-                    'LineWidth', lineWidth, ...
-                    'DisplayName', 'IV2 Inactivation');
-                h2_inact.Color(4) = markerAlpha;
-                
-                % IV2 Boltzmann Fit
-                if ~isempty(iv2Fit) && isfield(iv2Fit, 'fittedCurve')
-                    fitColor2 = obj.colors.iv2;
-                    fitColor2(4) = 0.7;  % Add transparency
-                    plot(voltages, iv2Fit.fittedCurve, ':', ...
-                        'Color', fitColor2, ...
-                        'LineWidth', fitLineWidth, ...
-                        'DisplayName', sprintf('IV2 Fit (V_{1/2}=%.1f, k=%.1f)', ...
-                            iv2Fit.fitParams.V_mid, iv2Fit.fitParams.k));
-                end
-            end
-            
-            ylabel('Normalized Inactivation (0-1)', 'FontSize', 12, 'FontWeight', 'bold');
-            ax = gca;
-            ax.YColor = [0, 0, 0];
-            ylim([0, 1.1]);
-            
-            %% RIGHT Y-AXIS: Test Pulse Current
-            yyaxis right
-            hold on;
-            
-            % IV1 Test Current (gray squares, hollow)
-            h1_test = plot(voltages, iv1Data.activationData, '-s', ...
-                'Color', obj.colors.iv1_current, ...
-                'MarkerSize', markerSize, ...
-                'MarkerFaceColor', 'none', ...
-                'LineWidth', lineWidth, ...
-                'DisplayName', 'IV1 Test Current');
-            h1_test.Color(4) = markerAlpha;
-            
-            % IV2 Test Current (light blue squares, hollow)
-            if ~isempty(iv2Data)
-                h2_test = plot(voltages, iv2Data.activationData, '-s', ...
-                    'Color', obj.colors.iv2_current, ...
-                    'MarkerSize', markerSize, ...
-                    'MarkerFaceColor', 'none', ...
-                    'LineWidth', lineWidth, ...
-                    'DisplayName', 'IV2 Test Current');
-                h2_test.Color(4) = markerAlpha;
-            end
-            
-            ylabel('Test Pulse Current (pA)', 'FontSize', 12, 'FontWeight', 'bold');
-            ax = gca;
-            ax.YColor = [0, 0, 0];
-            
-            % Auto-scale right axis appropriately
-            ylim_right = ylim;
-            if ylim_right(1) < 0
-                ylim([ylim_right(1) * 1.1, max(ylim_right(2), 100)]);
-            end
-            
-            %% X-AXIS and FORMATTING
-            xlabel('Conditioning Voltage (mV)', 'FontSize', 12, 'FontWeight', 'bold');
-            xlim([min(voltages) - 5, max(voltages) + 5]);
-            
-            % Title
-            titleStr = sprintf('Well %s: Inactivation Protocol', wellID);
-            if ~isempty(iv1Fit)
-                titleStr = sprintf('%s (IV1: R^2=%.3f)', titleStr, iv1Fit.fitParams.R2);
-            end
-            title(titleStr, 'FontSize', 14, 'FontWeight', 'bold');
-            
-            % Grid and legend
-            grid on;
-            ax = gca;
-            ax.GridAlpha = 0.15;
-            ax.GridLineStyle = '-';
-            ax.Box = 'on';
-            ax.LineWidth = 1.2;
-            
-            legend('Location', 'west', 'FontSize', 9, 'Box', 'off', 'NumColumns', 1);  % Single column, top-right position
+    if isempty(results)
+        fprintf('No results to plot.\n');
+        return;
+    end
+    
+    % Generate plots
+    generatePlots(results);
+    
+    fprintf('\n=== PLOTTING COMPLETE ===\n');
+end
 
-            hold off;
-            
-            obj.logger.logInfo(sprintf('Plotted dual-axis inactivation for well %s', wellID));
-        end
+function results = runNewAnalysis()
+    %RUNNEWANALYSIS Run complete pipeline and return results
+    
+    fprintf('Running new analysis...\n\n');
+    
+    % Initialize pipeline
+    pipeline = NanionAnalysisPipeline();
+    
+    % Select input file(s)
+    [filenames, pathname] = uigetfile(...
+        {'*.xlsx;*.xls', 'Excel Files (*.xlsx, *.xls)'}, ...
+        'Select Nanion Files', ...
+        'MultiSelect', 'on');
+    
+    if isequal(filenames, 0)
+        results = [];
+        return;
+    end
+    
+    if ischar(filenames)
+        filenames = {filenames};
+    end
+    
+    filePaths = cellfun(@(f) fullfile(pathname, f), filenames, 'UniformOutput', false);
+    
+    % Select output directory
+    outputDir = uigetdir(pathname, 'Select Output Directory');
+    if isequal(outputDir, 0)
+        outputDir = fullfile(pathname, 'boltzmann_output');
+    end
+    
+    % Run analysis
+    fprintf('Processing %d files...\n', length(filePaths));
+    results = pipeline.runAnalysis(filePaths, outputDir);
+    
+    fprintf('Analysis complete!\n\n');
+end
+
+function results = loadExistingResults()
+    %LOADEXISTINGRESULTS Load results from workspace or .mat file
+    
+    fprintf('Loading existing results...\n\n');
+    
+    % Check if results exist in workspace
+    if evalin('base', 'exist(''results'', ''var'')')
+        answer = questdlg('Found "results" variable in workspace. Use it?', ...
+            'Load Results', 'Yes', 'Load from file', 'Yes');
         
-        function plotBatch(obj, wellIDs, voltages, measurements, fitResults, protocolType)
-            %PLOTBATCH Generate plots for multiple wells
-            %   Creates individual plots for each well
-            
-            numWells = length(wellIDs);
-            obj.logger.logInfo(sprintf('Generating %d plots for %s protocol...', ...
-                numWells, protocolType));
-            
-            for i = 1:numWells
-                wellID = wellIDs(i);
-                
-                % Extract data for this well
-                iv1Data = obj.extractWellData(measurements.iv1, i);
-                
-                if isfield(measurements, 'iv2')
-                    iv2Data = obj.extractWellData(measurements.iv2, i);
-                else
-                    iv2Data = [];
-                end
-                
-                % Extract fit results
-                iv1Fit = [];
-                iv2Fit = [];
-                if ~isempty(fitResults)
-                    if i <= length(fitResults)
-                        if isfield(fitResults(i), 'iv1')
-                            iv1Fit = fitResults(i).iv1;
-                        end
-                        if isfield(fitResults(i), 'iv2')
-                            iv2Fit = fitResults(i).iv2;
-                        end
-                    end
-                end
-                
-                % Generate appropriate plot
-                if strcmp(protocolType, 'activation')
-                    obj.plotActivationDualAxis(wellID, voltages, iv1Data, iv2Data, iv1Fit, iv2Fit);
-                elseif strcmp(protocolType, 'inactivation')
-                    obj.plotInactivationDualPanel(wellID, voltages, iv1Data, iv2Data, iv1Fit, iv2Fit);
-                end
-            end
-            
-            obj.logger.logInfo(sprintf('✓ Generated %d plots', numWells));
+        if strcmp(answer, 'Yes')
+            results = evalin('base', 'results');
+            fprintf('Loaded results from workspace.\n\n');
+            return;
         end
     end
     
-    methods (Access = private)
-        function wellData = extractWellData(obj, ivData, wellIndex)
-            %EXTRACTWELLDATA Extract single well's data from IV measurements
+    % Load from .mat file
+    [filename, pathname] = uigetfile('*.mat', 'Select Results MAT File');
+    if isequal(filename, 0)
+        results = [];
+        return;
+    end
+    
+    loadedData = load(fullfile(pathname, filename));
+    
+    % Find results variable
+    if isfield(loadedData, 'results')
+        results = loadedData.results;
+    else
+        % Try to find first cell array that looks like results
+        fields = fieldnames(loadedData);
+        for i = 1:length(fields)
+            if iscell(loadedData.(fields{i}))
+                results = loadedData.(fields{i});
+                break;
+            end
+        end
+    end
+    
+    if isempty(results)
+        fprintf('No valid results found in file.\n');
+    else
+        fprintf('Loaded results from file.\n\n');
+    end
+end
+
+function generatePlots(results)
+    %GENERATEPLOTS Create all visualization plots
+    
+    fprintf('Generating plots...\n\n');
+    
+    % Initialize components
+    config = NanionConfig();
+    logger = NanionLogger(config);
+    summaryFigure = NanionSummaryFigure(config, logger);
+    
+    % Process each file
+    numFiles = length(results);
+    
+    for i = 1:numFiles
+        result = results{i};
+        
+        % Validate result structure
+        if ~isstruct(result) || ~isfield(result, 'fittedData')
+            fprintf('Skipping result %d (no fittedData)\n', i);
+            continue;
+        end
+        
+        % Check if analysis succeeded
+        if isfield(result, 'status') && strcmp(result.status, 'failed')
+            fprintf('Skipping result %d (failed analysis)\n', i);
+            continue;
+        end
+        
+        % Check for required fields
+        if ~isfield(result, 'filteredData') || ~isfield(result, 'summaryTable')
+            fprintf('Skipping result %d (missing required data)\n', i);
+            continue;
+        end
+        
+        filteredData = result.filteredData;
+        fittedData = result.fittedData;
+        summaryTable = result.summaryTable;
+        
+        % Verify we have fitted wells
+        if isempty(fittedData.wells)
+            fprintf('Skipping result %d (no fitted wells)\n', i);
+            continue;
+        end
+        
+        % Create output directory
+        if isfield(result, 'outputDir')
+            plotDir = fullfile(result.outputDir, 'plots');
+        else
+            plotDir = fullfile(pwd, 'boltzmann_plots', result.fileName);
+        end
+        
+        if ~exist(plotDir, 'dir')
+            mkdir(plotDir);
+        end
+        
+        fprintf('Plotting file %d/%d: %s\n', i, numFiles, result.fileName);
+        fprintf('  Output: %s\n', plotDir);
+        
+        % Generate both summary figures
+        try
+            [fig1, fig2] = summaryFigure.createSummaryFigures(...
+                filteredData, fittedData, summaryTable, plotDir);
             
-            fields = fieldnames(ivData);
-            wellData = struct();
+            fprintf('  ✓ Generated Figure 1: Representative Wells\n');
+            fprintf('  ✓ Generated Figure 2: Cell Type Averages\n');
             
-            for i = 1:length(fields)
-                fieldName = fields{i};
-                % Extract row for this well (handle both 1D and 2D arrays)
-                if size(ivData.(fieldName), 1) >= wellIndex
-                    wellData.(fieldName) = ivData.(fieldName)(wellIndex, :);
-                end
+            % Display summary statistics
+            summary = fittedData.summary;
+            fprintf('  Wells: %d Good, %d Acceptable, %d Poor, %d Failed\n', ...
+                summary.fitResults.good, summary.fitResults.acceptable, ...
+                summary.fitResults.poor, summary.fitResults.failed);
+            
+            if summary.fitResults.good + summary.fitResults.acceptable > 0
+                fprintf('  Mean V½: %.2f ± %.2f mV\n', ...
+                    summary.parameterStats.V_mid_mean, ...
+                    summary.parameterStats.V_mid_std);
+            end
+            
+            % Get compound group info
+            passingMask = strcmp(summaryTable.Fit_Quality, 'Good') | ...
+                          strcmp(summaryTable.Fit_Quality, 'Acceptable');
+            passingTable = summaryTable(passingMask, :);
+            
+            if height(passingTable) > 0
+                numCellTypes = length(unique(passingTable.Cell_Type));
+                numCompounds = length(unique(passingTable.Compound));
+                numGroups = height(unique(passingTable(:, {'Cell_Type', 'Compound'})));
+                
+                fprintf('  Cell Types: %d | Compounds: %d | Groups: %d\n', ...
+                    numCellTypes, numCompounds, numGroups);
+            end
+            
+        catch ME
+            fprintf('  ✗ Plotting failed: %s\n', ME.message);
+            fprintf('     %s\n', ME.stack(1).name);
+        end
+        
+        fprintf('\n');
+    end
+    
+    fprintf('All plots generated successfully!\n');
+    
+    % Offer to open output directory
+    if numFiles == 1 && exist('plotDir', 'var')
+        answer = questdlg('Open output folder?', 'Plotting Complete', 'Yes', 'No', 'Yes');
+        if strcmp(answer, 'Yes')
+            if ispc
+                winopen(plotDir);
+            elseif ismac
+                system(['open "' plotDir '"']);
+            else
+                system(['xdg-open "' plotDir '"']);
             end
         end
     end

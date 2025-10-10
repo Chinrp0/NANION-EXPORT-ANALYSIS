@@ -1,6 +1,6 @@
 function plot_boltzmann_results()
     %PLOT_BOLTZMANN_RESULTS Interactive script to visualize Boltzmann fitting results
-    %   Can plot from existing pipeline results or run fresh analysis
+    %   Generates Figure 1 (Representative Wells) and Figure 2 (Cell Type Averages)
     
     fprintf('=== BOLTZMANN RESULTS PLOTTER ===\n\n');
     
@@ -120,10 +120,10 @@ function generatePlots(results)
     
     fprintf('Generating plots...\n\n');
     
-    % Initialize plotter
+    % Initialize components
     config = NanionConfig();
     logger = NanionLogger(config);
-    plotter = NanionBoltzmannPlotter(config, logger);
+    summaryFigure = NanionSummaryFigure(config, logger);
     
     % Process each file
     numFiles = length(results);
@@ -131,19 +131,27 @@ function generatePlots(results)
     for i = 1:numFiles
         result = results{i};
         
-        % Check if result is valid
+        % Validate result structure
         if ~isstruct(result) || ~isfield(result, 'fittedData')
             fprintf('Skipping result %d (no fittedData)\n', i);
             continue;
         end
         
-        % Check if result succeeded
+        % Check if analysis succeeded
         if isfield(result, 'status') && strcmp(result.status, 'failed')
             fprintf('Skipping result %d (failed analysis)\n', i);
             continue;
         end
         
+        % Check for required fields
+        if ~isfield(result, 'filteredData') || ~isfield(result, 'summaryTable')
+            fprintf('Skipping result %d (missing required data)\n', i);
+            continue;
+        end
+        
+        filteredData = result.filteredData;
         fittedData = result.fittedData;
+        summaryTable = result.summaryTable;
         
         % Verify we have fitted wells
         if isempty(fittedData.wells)
@@ -151,7 +159,7 @@ function generatePlots(results)
             continue;
         end
         
-        % Create plots output directory
+        % Create output directory
         if isfield(result, 'outputDir')
             plotDir = fullfile(result.outputDir, 'plots');
         else
@@ -165,13 +173,15 @@ function generatePlots(results)
         fprintf('Plotting file %d/%d: %s\n', i, numFiles, result.fileName);
         fprintf('  Output: %s\n', plotDir);
         
-        % Generate all plots
+        % Generate both summary figures
         try
-            plotter.plotAllResults(fittedData, plotDir, result.fileName);
+            [fig1, fig2] = summaryFigure.createSummaryFigures(...
+                filteredData, fittedData, summaryTable, plotDir);
             
-            fprintf('  ✓ Generated %d plot types\n', 4);
+            fprintf('  ✓ Generated Figure 1: Representative Wells\n');
+            fprintf('  ✓ Generated Figure 2: Cell Type Averages\n');
             
-            % Display summary
+            % Display summary statistics
             summary = fittedData.summary;
             fprintf('  Wells: %d Good, %d Acceptable, %d Poor, %d Failed\n', ...
                 summary.fitResults.good, summary.fitResults.acceptable, ...
@@ -183,8 +193,23 @@ function generatePlots(results)
                     summary.parameterStats.V_mid_std);
             end
             
+            % Get compound group info
+            passingMask = strcmp(summaryTable.Fit_Quality, 'Good') | ...
+                          strcmp(summaryTable.Fit_Quality, 'Acceptable');
+            passingTable = summaryTable(passingMask, :);
+            
+            if height(passingTable) > 0
+                numCellTypes = length(unique(passingTable.Cell_Type));
+                numCompounds = length(unique(passingTable.Compound));
+                numGroups = height(unique(passingTable(:, {'Cell_Type', 'Compound'})));
+                
+                fprintf('  Cell Types: %d | Compounds: %d | Groups: %d\n', ...
+                    numCellTypes, numCompounds, numGroups);
+            end
+            
         catch ME
             fprintf('  ✗ Plotting failed: %s\n', ME.message);
+            fprintf('     %s\n', ME.stack(1).name);
         end
         
         fprintf('\n');
@@ -195,8 +220,14 @@ function generatePlots(results)
     % Offer to open output directory
     if numFiles == 1 && exist('plotDir', 'var')
         answer = questdlg('Open output folder?', 'Plotting Complete', 'Yes', 'No', 'Yes');
-        if strcmp(answer, 'Yes') && ispc
-            winopen(plotDir);
+        if strcmp(answer, 'Yes')
+            if ispc
+                winopen(plotDir);
+            elseif ismac
+                system(['open "' plotDir '"']);
+            else
+                system(['xdg-open "' plotDir '"']);
+            end
         end
     end
 end
