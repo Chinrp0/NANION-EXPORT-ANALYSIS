@@ -46,13 +46,14 @@ classdef NanionDataExtractor < handle
                 
                 obj.logger.logInfo(sprintf('✓ Extracted: %d wells × %d sweeps × %d IVs', ...
                     extractedData.numWells, extractedData.numSweeps, extractedData.numIVs));
-                
+                                
                 % Calculate conductance for activation protocols
                 if strcmp(protocolInfo.type, 'activation')
                     extractedData = obj.calculateConductance(extractedData);
+                    extractedData = obj.filterNegativeConductance(extractedData);  % Just the filter
                     extractedData = obj.normalizeConductance(extractedData);
                 end
-                
+                                
                 % Calculate current density (for ALL protocols)
                 extractedData = obj.calculateCurrentDensity(extractedData);
                 
@@ -128,13 +129,15 @@ classdef NanionDataExtractor < handle
         end
 
         function extractedData = normalizeConductance(obj, extractedData)
-            %NORMALIZECONDUCTANCE Normalize conductance to 0-1 range per well per IV
+            %NORMALIZECONDUCTANCE Normalize conductance using VOLTAGE-BASED endpoints
+            %   For activation: G at most negative V → 0, G at most positive V → 1
+            %   This prevents inversion artifacts from min/max normalization
             
             if ~strcmp(extractedData.protocolInfo.type, 'activation')
                 return;
             end
             
-            obj.logger.logInfo('Normalizing conductance to 0-1 range per well...');
+            obj.logger.logInfo('Normalizing conductance (voltage-based endpoints)...');
             
             measurements = extractedData.measurements;
             ivFields = fieldnames(measurements);
@@ -143,17 +146,50 @@ classdef NanionDataExtractor < handle
                 ivName = ivFields{i};
                 conductance_raw = measurements.(ivName).conductance;
                 numWells = size(conductance_raw, 1);
+                numVoltages = size(conductance_raw, 2);
                 conductance_normalized = zeros(size(conductance_raw));
                 
                 for wellIdx = 1:numWells
                     G = conductance_raw(wellIdx, :);
-                    G_min = min(G);
-                    G_max = max(G);
                     
-                    if G_max ~= G_min
-                        conductance_normalized(wellIdx, :) = (G - G_min) / (G_max - G_min);
+                    % Use conductance at EXTREME VOLTAGES (not min/max)
+                    % Assumes voltages are sorted: [most negative ... most positive]
+                    G_at_min_voltage = G(1);        % Should be low for activation
+                    G_at_max_voltage = G(end);      % Should be high for activation
+                    
+                    % Check if we have valid data at endpoints
+                    if isnan(G_at_min_voltage) || isnan(G_at_max_voltage)
+                        % Fallback: use first/last non-NaN values
+                        validIdx = find(~isnan(G));
+                        if length(validIdx) >= 2
+                            G_at_min_voltage = G(validIdx(1));
+                            G_at_max_voltage = G(validIdx(end));
+                        else
+                            % Insufficient data - store NaNs
+                            conductance_normalized(wellIdx, :) = NaN(size(G));
+                            obj.logger.logWarning(sprintf('%s Well %d: Insufficient valid conductance data', ...
+                                ivName, wellIdx));
+                            continue;
+                        end
+                    end
+                    
+                    % Normalize: (G - G_baseline) / (G_max - G_baseline)
+                    G_range = G_at_max_voltage - G_at_min_voltage;
+                    
+                    if abs(G_range) > 1e-12  % Avoid division by zero
+                        conductance_normalized(wellIdx, :) = (G - G_at_min_voltage) / G_range;
+                        
+                        % DIAGNOSTIC: Check if normalization looks inverted
+                        if conductance_normalized(wellIdx, 1) > 0.5 && ...
+                           conductance_normalized(wellIdx, end) < 0.5
+                            obj.logger.logWarning(sprintf(['%s Well %d: Normalized curve appears INVERTED ' ...
+                                '(starts high, ends low). Check raw conductance calculation!'], ivName, wellIdx));
+                        end
                     else
-                        conductance_normalized(wellIdx, :) = zeros(size(G));
+                        % Flat conductance curve (no activation)
+                        conductance_normalized(wellIdx, :) = 0.5 * ones(size(G));
+                        obj.logger.logDebug(sprintf('%s Well %d: Flat conductance (G_range ≈ 0)', ...
+                            ivName, wellIdx));
                     end
                 end
                 
@@ -161,11 +197,12 @@ classdef NanionDataExtractor < handle
                 measurements.(ivName).conductance_raw = conductance_raw;
                 measurements.(ivName).conductance = conductance_normalized;
                 
-                obj.logger.logDebug(sprintf('%s: Normalized conductance', ivName));
+                obj.logger.logDebug(sprintf('%s: Normalized %d wells using voltage-based endpoints', ...
+                    ivName, numWells));
             end
             
             extractedData.measurements = measurements;
-            obj.logger.logInfo('✓ Conductance normalized (raw stored separately)');
+            obj.logger.logInfo('✓ Conductance normalized (voltage-based method)');
         end
 
         function filteredData = applyQualityFilters(obj, extractedData)
@@ -199,6 +236,13 @@ classdef NanionDataExtractor < handle
             
             filteredMeasurements = obj.applyFilterMask(measurements, qualityMask);
             
+            % Add negative conductance filter info to report (if it was applied)
+            if isfield(extractedData, 'negativeConductanceFilter')
+                filterReport.negativeConductanceFiltered = extractedData.negativeConductanceFilter.numFiltered;
+            else
+                filterReport.negativeConductanceFiltered = 0;
+            end
+
             filteredData = struct(...
                 'wellIDs', extractedData.wellIDs(qualityMask), ...
                 'wellMetadata', struct(...
@@ -637,6 +681,12 @@ classdef NanionDataExtractor < handle
                 obj.logger.logInfo(sprintf('IV1 used: %d, IV2 fallback: %d', ...
                     filterReport.ivUsage.iv1Used, filterReport.ivUsage.iv2Used));
             end
+            
+            % ADD THIS:
+            if isfield(filterReport, 'negativeConductanceFiltered') && filterReport.negativeConductanceFiltered > 0
+                obj.logger.logInfo(sprintf('⚠ Pre-filtered: %d wells removed for negative conductance', ...
+                    filterReport.negativeConductanceFiltered));
+            end
         end
         
         function filteredMeasurements = applyFilterMask(obj, measurements, qualityMask)
@@ -663,5 +713,181 @@ classdef NanionDataExtractor < handle
                 end
             end
         end
+
+        function diagnoseConductanceInversion(extractedData, logger)
+            %DIAGNOSECONDUCTANCEINVERSION Check for inverted raw conductance
+            %   Run this AFTER calculateConductance() but BEFORE normalizeConductance()
+            
+            logger.logInfo('=== CONDUCTANCE DIAGNOSTIC ===');
+            
+            measurements = extractedData.measurements;
+            voltages = extractedData.protocolInfo.voltages;
+            V_rev = extractedData.protocolInfo.V_rev;  % Assumes stored in protocolInfo
+            
+            ivFields = fieldnames(measurements);
+            
+            for i = 1:length(ivFields)
+                ivName = ivFields{i};
+                
+                % Get raw data
+                peakCurrent = measurements.(ivName).peakCurrent;  % [wells × voltages]
+                conductance_raw = measurements.(ivName).conductance;
+                
+                numWells = size(conductance_raw, 1);
+                inverted_count = 0;
+                negative_count = 0;
+                
+                for wellIdx = 1:numWells
+                    G = conductance_raw(wellIdx, :);
+                    I = peakCurrent(wellIdx, :);
+                    
+                    % Check 1: Is conductance decreasing with voltage?
+                    G_start = G(1);   % At most negative V
+                    G_end = G(end);   % At most positive V
+                    
+                    if ~isnan(G_start) && ~isnan(G_end) && G_end < G_start
+                        inverted_count = inverted_count + 1;
+                        
+                        if inverted_count <= 3  % Log first 3 cases
+                            logger.logWarning(sprintf(['%s Well %d: INVERTED conductance! ' ...
+                                'G(V_min)=%.2e, G(V_max)=%.2e'], ivName, wellIdx, G_start, G_end));
+                            
+                            % Detailed diagnosis
+                            logger.logDebug(sprintf('  Current range: [%.1f, %.1f] pA', ...
+                                min(I, [], 'omitnan'), max(I, [], 'omitnan')));
+                            logger.logDebug(sprintf('  Driving force: V - V_rev = [%.1f, %.1f] - %.1f mV', ...
+                                voltages(1), voltages(end), V_rev));
+                        end
+                    end
+                    
+                    % Check 2: Are there negative conductance values?
+                    if any(G < 0)  % any() ignores NaNs for comparison operators
+                        negative_count = negative_count + 1;
+                    end
+                end
+                
+                % Summary
+                if inverted_count > 0 || negative_count > 0
+                    logger.logWarning(sprintf('%s: %d/%d wells have INVERTED conductance', ...
+                        ivName, inverted_count, numWells));
+                    logger.logWarning(sprintf('%s: %d/%d wells have NEGATIVE conductance values', ...
+                        ivName, negative_count, numWells));
+                else
+                    logger.logInfo(sprintf('%s: All wells have normal conductance direction', ivName));
+                end
+            end
+            
+            logger.logInfo('=== END DIAGNOSTIC ===');
+        end
+
+
+        function extractedData = filterNegativeConductance(obj, extractedData)
+            %FILTERNEGATIVECONDUCTANCE Remove wells with negative conductance values
+            %   Marks wells as failed quality if ANY conductance value is negative
+            %   Updates metadata to track reason for filtering
+            
+            if ~strcmp(extractedData.protocolInfo.type, 'activation')
+                return;  % Only applies to activation protocols
+            end
+            
+            obj.logger.logInfo('Filtering wells with negative conductance...');
+            
+            measurements = extractedData.measurements;
+            ivFields = fieldnames(measurements);
+            numWells = extractedData.numWells;
+            
+            % Track which wells have negative conductance
+            hasNegativeConductance = false(numWells, 1);
+            negativeConductanceIV = strings(numWells, 1);  % Which IV has negative values
+            
+            for i = 1:length(ivFields)
+                ivName = ivFields{i};
+                conductance_raw = measurements.(ivName).conductance;
+                
+                for wellIdx = 1:numWells
+                    G = conductance_raw(wellIdx, :);
+                    
+                    % Check if ANY conductance value is negative
+                    if any(G < 0)
+                        hasNegativeConductance(wellIdx) = true;
+                        
+                        % Track which IV(s) have the problem
+                        if negativeConductanceIV(wellIdx) == ""
+                            negativeConductanceIV(wellIdx) = ivName;
+                        else
+                            negativeConductanceIV(wellIdx) = negativeConductanceIV(wellIdx) + "," + ivName;
+                        end
+                    end
+                end
+            end
+            
+            % Count how many wells will be filtered
+            numFiltered = sum(hasNegativeConductance);
+            
+            if numFiltered > 0
+                obj.logger.logWarning(sprintf('Found %d/%d wells with negative conductance', ...
+                    numFiltered, numWells));
+                
+                % Log first few affected wells
+                filteredWellIndices = find(hasNegativeConductance);
+                numToLog = min(5, numFiltered);
+                
+                for i = 1:numToLog
+                    wellIdx = filteredWellIndices(i);
+                    obj.logger.logWarning(sprintf('  Well %s (%s): negative conductance detected', ...
+                        extractedData.wellIDs(wellIdx), negativeConductanceIV(wellIdx)));
+                end
+                
+                if numFiltered > 5
+                    obj.logger.logWarning(sprintf('  ... and %d more wells', numFiltered - 5));
+                end
+                
+                % Apply filter: remove wells with negative conductance
+                validMask = ~hasNegativeConductance;
+                
+                % Filter all data structures
+                extractedData.wellIDs = extractedData.wellIDs(validMask);
+                extractedData.wellMetadata.cellType = extractedData.wellMetadata.cellType(validMask);
+                extractedData.wellMetadata.cellConcentration = extractedData.wellMetadata.cellConcentration(validMask);
+                
+                % Filter measurements
+                for i = 1:length(ivFields)
+                    ivName = ivFields{i};
+                    ivData = measurements.(ivName);
+                    
+                    paramFields = fieldnames(ivData);
+                    for j = 1:length(paramFields)
+                        paramName = paramFields{j};
+                        data = ivData.(paramName);
+                        
+                        % Filter 2D arrays [wells × sweeps] and 1D arrays [wells × 1]
+                        if size(data, 1) == numWells
+                            measurements.(ivName).(paramName) = data(validMask, :);
+                        end
+                    end
+                end
+                
+                extractedData.measurements = measurements;
+                extractedData.numWells = sum(validMask);
+                
+                % Add filter metadata
+                extractedData.negativeConductanceFilter = struct(...
+                    'applied', true, ...
+                    'numFiltered', numFiltered, ...
+                    'numRemaining', sum(validMask), ...
+                    'filteredWellIDs', extractedData.wellIDs(hasNegativeConductance));
+                
+                obj.logger.logInfo(sprintf('✓ Negative conductance filter: %d wells removed, %d remaining', ...
+                    numFiltered, sum(validMask)));
+            else
+                obj.logger.logInfo('✓ No wells with negative conductance detected');
+                
+                extractedData.negativeConductanceFilter = struct(...
+                    'applied', true, ...
+                    'numFiltered', 0, ...
+                    'numRemaining', numWells);
+            end
+        end
+
     end
 end
