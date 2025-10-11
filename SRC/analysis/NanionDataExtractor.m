@@ -842,6 +842,9 @@ classdef NanionDataExtractor < handle
                     obj.logger.logWarning(sprintf('  ... and %d more wells', numFiltered - 5));
                 end
                 
+                % SAVE FILTERED WELL IDs BEFORE FILTERING
+                filteredWellIDs = extractedData.wellIDs(hasNegativeConductance);
+                
                 % Apply filter: remove wells with negative conductance
                 validMask = ~hasNegativeConductance;
                 
@@ -875,10 +878,11 @@ classdef NanionDataExtractor < handle
                     'applied', true, ...
                     'numFiltered', numFiltered, ...
                     'numRemaining', sum(validMask), ...
-                    'filteredWellIDs', extractedData.wellIDs(hasNegativeConductance));
+                    'filteredWellIDs', filteredWellIDs);  % ← USE SAVED VARIABLE
                 
                 obj.logger.logInfo(sprintf('✓ Negative conductance filter: %d wells removed, %d remaining', ...
                     numFiltered, sum(validMask)));
+
             else
                 obj.logger.logInfo('✓ No wells with negative conductance detected');
                 
