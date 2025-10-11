@@ -412,6 +412,11 @@ classdef NanionBoltzmannFitter < handle
             iv2_acceptable = 0;
             iv2_poor = 0;
             iv2_failed = 0;
+
+
+            % Count IV3 and IV4 if they exist
+            iv3_good = 0; iv3_acceptable = 0; iv3_poor = 0; iv3_failed = 0;
+            iv4_good = 0; iv4_acceptable = 0; iv4_poor = 0; iv4_failed = 0;
             
             for i = 1:numWells
                 % Count IV1 results
@@ -445,11 +450,41 @@ classdef NanionBoltzmannFitter < handle
                 end
             end
             
-            % Combined totals (for backward compatibility)
-            total_good = iv1_good + iv2_good;
-            total_acceptable = iv1_acceptable + iv2_acceptable;
-            total_poor = iv1_poor + iv2_poor;
-            total_failed = iv1_failed + iv2_failed;
+            for i = 1:numWells
+                % Count IV3 results (if exists)
+                if isfield(wells(i), 'iv3') && ~isempty(wells(i).iv3) && isfield(wells(i).iv3, 'fitQuality')
+                    switch wells(i).iv3.fitQuality
+                        case 'Good'
+                            iv3_good = iv3_good + 1;
+                        case 'Acceptable'
+                            iv3_acceptable = iv3_acceptable + 1;
+                        case 'Poor'
+                            iv3_poor = iv3_poor + 1;
+                        case 'Failed'
+                            iv3_failed = iv3_failed + 1;
+                    end
+                end
+                
+                % Count IV4 results (if exists)
+                if isfield(wells(i), 'iv4') && ~isempty(wells(i).iv4) && isfield(wells(i).iv4, 'fitQuality')
+                    switch wells(i).iv4.fitQuality
+                        case 'Good'
+                            iv4_good = iv4_good + 1;
+                        case 'Acceptable'
+                            iv4_acceptable = iv4_acceptable + 1;
+                        case 'Poor'
+                            iv4_poor = iv4_poor + 1;
+                        case 'Failed'
+                            iv4_failed = iv4_failed + 1;
+                    end
+                end
+            end
+            
+            % Update combined totals to include iv3/iv4
+            total_good = iv1_good + iv2_good + iv3_good + iv4_good;
+            total_acceptable = iv1_acceptable + iv2_acceptable + iv3_acceptable + iv4_acceptable;
+            total_poor = iv1_poor + iv2_poor + iv3_poor + iv4_poor;
+            total_failed = iv1_failed + iv2_failed + iv3_failed + iv4_failed;
             
             % Build summary structure
             summary = struct(...
@@ -468,17 +503,48 @@ classdef NanionBoltzmannFitter < handle
                     'acceptable', iv2_acceptable, ...
                     'poor', iv2_poor, ...
                     'failed', iv2_failed), ...
+                'iv3Results', struct(...
+                    'good', iv3_good, ...
+                    'acceptable', iv3_acceptable, ...
+                    'poor', iv3_poor, ...
+                    'failed', iv3_failed), ...
+                'iv4Results', struct(...
+                    'good', iv4_good, ...
+                    'acceptable', iv4_acceptable, ...
+                    'poor', iv4_poor, ...
+                    'failed', iv4_failed), ...
                 'numWells', numWells);
             
-            obj.logger.logDebug(sprintf('Summary: IV1 (%d good, %d acceptable, %d poor, %d failed)', ...
+            obj.logger.logInfo(sprintf('  IV1: %d Good, %d Acceptable, %d Poor, %d Failed', ...
                 iv1_good, iv1_acceptable, iv1_poor, iv1_failed));
             
             if iv2_good + iv2_acceptable + iv2_poor + iv2_failed > 0
-                obj.logger.logDebug(sprintf('Summary: IV2 (%d good, %d acceptable, %d poor, %d failed)', ...
+                obj.logger.logInfo(sprintf('  IV2: %d Good, %d Acceptable, %d Poor, %d Failed', ...
                     iv2_good, iv2_acceptable, iv2_poor, iv2_failed));
             end
+            
+            % Check if iv3 results exist
+            if isfield(summary, 'iv3Results')
+                iv3_total = summary.iv3Results.good + summary.iv3Results.acceptable + ...
+                            summary.iv3Results.poor + summary.iv3Results.failed;
+                if iv3_total > 0
+                    obj.logger.logInfo(sprintf('  IV3: %d Good, %d Acceptable, %d Poor, %d Failed', ...
+                        summary.iv3Results.good, summary.iv3Results.acceptable, ...
+                        summary.iv3Results.poor, summary.iv3Results.failed));
+                end
+            end
+            
+            % Check if iv4 results exist
+            if isfield(summary, 'iv4Results')
+                iv4_total = summary.iv4Results.good + summary.iv4Results.acceptable + ...
+                            summary.iv4Results.poor + summary.iv4Results.failed;
+                if iv4_total > 0
+                    obj.logger.logInfo(sprintf('  IV4: %d Good, %d Acceptable, %d Poor, %d Failed', ...
+                        summary.iv4Results.good, summary.iv4Results.acceptable, ...
+                        summary.iv4Results.poor, summary.iv4Results.failed));
+                end
+            end
         end
-
     end
     
     methods (Static)
