@@ -1,6 +1,6 @@
 classdef NanionSummaryFigure < handle
     %NANIONSUMMARYFIGURE Publication-quality summary figures
-    %   FIXED: Colored compound legend + proper current axis scaling
+    %   FIXED: Colored compound legend + proper current axis scaling + invisible figures
     
     properties (Access = private)
         config
@@ -69,7 +69,8 @@ classdef NanionSummaryFigure < handle
             numWorst = min(3, height(worstWells));
             
             figHandle = figure('Position', [50, 50, 2100, 900], ...
-                'Color', 'w', 'Name', 'Representative Wells');
+                'Color', 'w', 'Name', 'Representative Wells', ...
+                'Visible', 'off');
             
             sharedLegendHandles = [];
             sharedLegendLabels = {};
@@ -189,7 +190,8 @@ classdef NanionSummaryFigure < handle
             obj.logger.logInfo(sprintf('Found %d unique cell types', numCellTypes));
             
             figHandle = figure('Position', [50, 50, 1800, 700], ...
-                'Color', 'w', 'Name', 'Cell Type Averages');
+                'Color', 'w', 'Name', 'Cell Type Averages', ...
+                'Visible', 'off');
             
             allCompounds = unique(passingTable.Compound);
             compoundColorMap = obj.assignCompoundColors(allCompounds);
@@ -221,6 +223,10 @@ classdef NanionSummaryFigure < handle
                 
                 cellTypeCompounds = unique(cellTypeTable.Compound);
                 
+                % Track handles/labels for THIS subplot's legend
+                subplotHandles = [];
+                subplotLabels = {};
+                
                 hold on;
                 
                 for c = 1:length(cellTypeCompounds)
@@ -240,6 +246,11 @@ classdef NanionSummaryFigure < handle
                         [h2, ~] = obj.plotCompoundCurve(filteredData, fittedData, iv2Data, ...
                             voltages, protocolType, compound, compoundColor, '-', 'o', 'IV2');
                         
+                        % Add to subplot-specific legend
+                        subplotHandles = [subplotHandles; h2];
+                        subplotLabels = [subplotLabels; {sprintf('%s (IV2)', obj.formatCompoundName(compound))}];
+                        
+                        % Track globally for first occurrence
                         compoundKey = char(compound);
                         if ~isKey(compoundsSeen, compoundKey)
                             allHandles = [allHandles; h2];
@@ -255,8 +266,12 @@ classdef NanionSummaryFigure < handle
                     
                     % Plot IV3
                     if height(iv3Data) > 0
-                        obj.plotCompoundCurve(filteredData, fittedData, iv3Data, ...
+                        [h3, ~] = obj.plotCompoundCurve(filteredData, fittedData, iv3Data, ...
                             voltages, protocolType, compound, compoundColor, '--', 's', 'IV3');
+                        
+                        % Add to subplot-specific legend
+                        subplotHandles = [subplotHandles; h3];
+                        subplotLabels = [subplotLabels; {sprintf('%s (IV3)', obj.formatCompoundName(compound))}];
                         
                         V_mid_mean = mean(iv3Data.V_mid_mV, 'omitnan');
                         V_mid_SEM = std(iv3Data.V_mid_mV, 'omitnan') / sqrt(height(iv3Data));
@@ -287,6 +302,14 @@ classdef NanionSummaryFigure < handle
                 ax.GridAlpha = 0.2;
                 ax.LineWidth = 1.2;
                 ax.FontSize = 12;
+                
+                % Add legend to each subplot showing compounds in THIS cell type
+                if ~isempty(subplotHandles)
+                    leg = legend(subplotHandles, subplotLabels, ...
+                        'Location', 'southeast', ...
+                        'FontSize', 9, ...
+                        'Box', 'on');
+                end
             end
             
             % External stats panel with COLORED LEGEND
@@ -331,68 +354,38 @@ classdef NanionSummaryFigure < handle
                 'LineWidth', 1.5, ...
                 'Margin', 10);
             
-            % COLORED COMPOUND LEGEND
-            % Create legend entries with actual colors
-            yStart = 0.30;  % Starting position for legend
-            ySpacing = 0.04;  % Space between entries
+            % COLORED COMPOUND LEGEND - REMOVED (now in individual subplots)
+            % Just show line style reference
+            yStart = 0.25;
             
-            % Header
-            text(0.05, yStart + 0.02, '\bf\fontsize{12}Compounds\rm\fontsize{10}', ...
-                'Units', 'normalized', 'Interpreter', 'tex');
-            text(0.05, yStart - 0.01, repmat('─', 1, 12), ...
-                'Units', 'normalized', 'FontName', 'Courier New', 'FontSize', 10);
+            % Set axis limits to [0,1] for coordinate plotting
+            xlim(ax_stats, [0, 1]);
+            ylim(ax_stats, [0, 1]);
             
-            % Plot colored markers for each compound
-            for i = 1:length(allLabels)
-                yPos = yStart - 0.04 - (i * ySpacing);
-                
-                % Get compound color
-                compoundKey = char(allLabels{i});
-                if isKey(compoundColorMap, compoundKey)
-                    color = compoundColorMap(compoundKey);
-                else
-                    color = [0, 0, 0];
-                end
-                
-                % Plot colored line/marker
-                plot([0.08, 0.18], [yPos, yPos], '-o', ...
-                    'Color', color, 'LineWidth', 2.5, ...
-                    'MarkerSize', 7, 'MarkerFaceColor', color, ...
-                    'MarkerEdgeColor', 'k', ...
-                    'Parent', ax_stats, 'Clipping', 'off');
-                
-                % Add label
-                text(0.20, yPos, allLabels{i}, ...
-                    'Units', 'normalized', ...
-                    'FontSize', 10, ...
-                    'VerticalAlignment', 'middle');
-            end
-            
-            % Add line style legend
-            yLegendStart = yStart - 0.04 - ((length(allLabels) + 1) * ySpacing);
-            text(0.05, yLegendStart - 0.02, '\bf\fontsize{11}Line Styles\rm\fontsize{9}', ...
-                'Units', 'normalized', 'Interpreter', 'tex');
-            text(0.05, yLegendStart - 0.05, repmat('─', 1, 11), ...
-                'Units', 'normalized', 'FontName', 'Courier New', 'FontSize', 9);
+            % Line style legend
+            text(ax_stats, 0.05, yStart, '\bf\fontsize{11}Line Styles\rm\fontsize{9}', ...
+                'Units', 'data', 'Interpreter', 'tex');
+            text(ax_stats, 0.05, yStart - 0.03, repmat('─', 1, 11), ...
+                'Units', 'data', 'FontName', 'Courier New', 'FontSize', 9);
             
             % IV2 solid
-            plot([0.08, 0.18], [yLegendStart - 0.08, yLegendStart - 0.08], '-o', ...
+            plot(ax_stats, [0.08, 0.18], [yStart - 0.06, yStart - 0.06], '-o', ...
                 'Color', [0, 0, 0], 'LineWidth', 2, ...
                 'MarkerSize', 6, 'MarkerFaceColor', [0.7, 0.7, 0.7], ...
                 'MarkerEdgeColor', 'k', ...
-                'Parent', ax_stats, 'Clipping', 'off');
-            text(0.20, yLegendStart - 0.08, 'IV2 (solid, ○)', ...
-                'Units', 'normalized', 'FontSize', 9, ...
+                'Clipping', 'off');
+            text(ax_stats, 0.20, yStart - 0.06, 'IV2 (solid, ○)', ...
+                'Units', 'data', 'FontSize', 9, ...
                 'VerticalAlignment', 'middle');
             
             % IV3 dashed
-            plot([0.08, 0.18], [yLegendStart - 0.12, yLegendStart - 0.12], '--s', ...
+            plot(ax_stats, [0.08, 0.18], [yStart - 0.10, yStart - 0.10], '--s', ...
                 'Color', [0, 0, 0], 'LineWidth', 2, ...
                 'MarkerSize', 6, 'MarkerFaceColor', [0.7, 0.7, 0.7], ...
                 'MarkerEdgeColor', 'k', ...
-                'Parent', ax_stats, 'Clipping', 'off');
-            text(0.20, yLegendStart - 0.12, 'IV3 (dashed, □)', ...
-                'Units', 'normalized', 'FontSize', 9, ...
+                'Clipping', 'off');
+            text(ax_stats, 0.20, yStart - 0.10, 'IV3 (dashed, □)', ...
+                'Units', 'data', 'FontSize', 9, ...
                 'VerticalAlignment', 'middle');
             
             hold off;
@@ -480,7 +473,7 @@ classdef NanionSummaryFigure < handle
         
         function [legendHandles, legendLabels] = plotDualAxisFormatMultiIV(obj, wellID, voltages, ivDataArray, ivFitArray, ...
                 ivNames, category, r2, protocolType, showLegend)
-            %PLOTDUALAXISFORMATMULTIIV FIXED: Proper current axis scaling
+            %PLOTDUALAXISFORMATMULTIIV FIXED: Proper current axis scaling with 25% margin
             
             if nargin < 10
                 showLegend = true;
@@ -510,7 +503,7 @@ classdef NanionSummaryFigure < handle
             legendHandles = [];
             legendLabels = {};
             
-            %% FIRST: Find min/max current across ALL IVs for proper scaling
+            %% FIRST: Find max (most negative) current across ALL IVs for proper scaling
             allCurrents = [];
             for i = 1:numIVs
                 ivData = ivDataArray{i};
@@ -519,23 +512,18 @@ classdef NanionSummaryFigure < handle
                 end
             end
             
-            % Calculate proper limits with margin
+            % Calculate limits: most negative current + 10% margin
             if ~isempty(allCurrents)
-                minCurrent = min(allCurrents);
-                maxCurrent = max(allCurrents);
+                mostNegativeCurrent = min(allCurrents);  % Most negative value (e.g., -1500 pA)
                 
-                % Add 15% margin for better visibility
-                marginFactor = 0.15;
-                currentRange = abs(minCurrent - maxCurrent);
+                % Add 10% margin below the most negative current
+                margin = abs(mostNegativeCurrent) * 0.10;
+                currentLimMin = mostNegativeCurrent - margin;
+                currentLimMax = 0;  % Always 0 at top
                 
-                if currentRange > 0
-                    currentLimMin = minCurrent - marginFactor * currentRange;
-                    currentLimMax = 0;  % Always keep 0 at top
-                else
-                    % All currents are the same
-                    currentLimMin = minCurrent * 1.2;
-                    currentLimMax = 0;
-                end
+                % Optional debug output (uncomment to enable)
+                % fprintf('DEBUG %s: mostNeg=%.1f, margin=%.1f, limMin=%.1f\n', ...
+                %     char(wellID), mostNegativeCurrent, margin, currentLimMin);
             else
                 currentLimMin = -1500;
                 currentLimMax = 0;
@@ -584,7 +572,7 @@ classdef NanionSummaryFigure < handle
             ax.YColor = [0, 0, 0];
             ylim([0, 1.1]);
             
-            %% RIGHT: Current (FIXED SCALING)
+            %% RIGHT: Current (FIXED SCALING with 25% margin)
             yyaxis right
             hold on;
             
@@ -612,7 +600,7 @@ classdef NanionSummaryFigure < handle
             ax = gca;
             ax.YColor = [0, 0, 0];
             
-            % FIXED: Use calculated limits based on actual data
+            % FIXED: Use calculated limits with proper 25% margin
             ylim([currentLimMin, currentLimMax]);
             
             %% FORMATTING

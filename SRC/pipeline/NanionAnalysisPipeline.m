@@ -277,6 +277,15 @@ classdef NanionAnalysisPipeline < handle
                     'outputDir', fileOutputDir);
                                 
                 obj.logger.logInfo(sprintf('✓ Processing complete: %s', fileInfo.name));
+
+                % Auto-open output folder in File Explorer
+                if ispc
+                    winopen(fileOutputDir);
+                elseif ismac
+                    system(['open "' fileOutputDir '"']);
+                else
+                    system(['xdg-open "' fileOutputDir '"']);
+                end
                 
             catch ME
                 obj.logger.logError(sprintf('Processing failed for %s: %s', fileInfo.name, ME.message));
