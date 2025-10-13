@@ -23,87 +23,87 @@ classdef NanionBoltzmannFitter < handle
             voltages = filteredData.protocolInfo.voltages;
             ivUsed = filteredData.ivUsedForFiltering;
             
-            % Get data based on protocol type
+            % DYNAMIC IV DETECTION - Get all available IVs
+            ivNames = fieldnames(filteredData.measurements);
+            numIVs = length(ivNames);
+            obj.logger.logInfo(sprintf('Detected %d IVs: %s', numIVs, strjoin(ivNames, ', ')));
+            
+            % Extract data for all available IVs
+            ivDataArray = cell(1, numIVs);
+            
             if strcmp(protocolType, 'activation')
+                % Check conductance is calculated
                 if ~isfield(filteredData.measurements.iv1, 'conductance')
                     error('NanionBoltzmannFitter:MissingConductance', ...
                         'Conductance not calculated. Run calculateConductance() first.');
                 end
                 
-                iv1Data = filteredData.measurements.iv1.conductance;
-                if isfield(filteredData.measurements, 'iv2')
-                    iv2Data = filteredData.measurements.iv2.conductance;
-                else
-                    iv2Data = [];
+                % Extract conductance for all IVs
+                for i = 1:numIVs
+                    ivDataArray{i} = filteredData.measurements.(ivNames{i}).conductance;
                 end
                 
                 dataType = 'conductance';
                 dataUnits = 'nS';
                 obj.logger.logInfo('Using conductance (nS) for activation protocol');
-            
-                else % inactivation
-                    % Normalize inactivation data for fitting
-                    iv1_inact_raw = filteredData.measurements.iv1.inactivationData;
+                
+            else % inactivation
+                % Normalize inactivation data for all IVs
+                for i = 1:numIVs
+                    ivName = ivNames{i};
+                    iv_inact_raw = filteredData.measurements.(ivName).inactivationData;
                     
-                    % Normalize each well by its own minimum (most negative = maximum absolute current)
-                    numWells = size(iv1_inact_raw, 1);
-                    iv1Data = zeros(size(iv1_inact_raw));
-                    for i = 1:numWells
-                        wellMin = min(iv1_inact_raw(i, :));
+                    % Normalize each well by its own minimum
+                    numWellsInIV = size(iv_inact_raw, 1);
+                    ivDataNormalized = zeros(size(iv_inact_raw));
+                    
+                    for w = 1:numWellsInIV
+                        wellMin = min(iv_inact_raw(w, :));
                         if wellMin ~= 0
-                            iv1Data(i, :) = iv1_inact_raw(i, :) / wellMin;
+                            ivDataNormalized(w, :) = iv_inact_raw(w, :) / wellMin;
                         else
-                            iv1Data(i, :) = iv1_inact_raw(i, :);
+                            ivDataNormalized(w, :) = iv_inact_raw(w, :);
                         end
                     end
                     
-                    % Normalize IV2 if available
-                    if isfield(filteredData.measurements, 'iv2')
-                        iv2_inact_raw = filteredData.measurements.iv2.inactivationData;
-                        iv2Data = zeros(size(iv2_inact_raw));
-                        for i = 1:numWells
-                            wellMin = min(iv2_inact_raw(i, :));
-                            if wellMin ~= 0
-                                iv2Data(i, :) = iv2_inact_raw(i, :) / wellMin;
-                            else
-                                iv2Data(i, :) = iv2_inact_raw(i, :);
-                            end
-                        end
-                    else
-                        iv2Data = [];
-                    end
-                    
-                    dataType = 'normalized_inactivation';
-                    dataUnits = '0-1';
-                    obj.logger.logInfo('Normalized inactivation data for Boltzmann fitting');
+                    ivDataArray{i} = ivDataNormalized;
                 end
-
+                
+                dataType = 'normalized_inactivation';
+                dataUnits = '0-1';
+                obj.logger.logInfo('Normalized inactivation data for Boltzmann fitting');
+            end
             
-                % Initialize wells array - UPDATED STRUCTURE
-                wells(numWells) = struct(...
-                    'wellID', '', ...
-                    'protocol', '', ...
-                    'ivUsed', '', ...
-                    'voltages', [], ...
-                    'dataType', dataType, ...
-                    'dataUnits', dataUnits, ...
-                    'iv1', struct(), ...
-                    'iv2', []);
+            % Initialize wells array with dynamic IV fields
+            wells(numWells) = struct(...
+                'wellID', '', ...
+                'protocol', '', ...
+                'ivUsed', '', ...
+                'voltages', [], ...
+                'dataType', dataType, ...
+                'dataUnits', dataUnits);
+            
+            % Add IV fields dynamically
+            for i = 1:numIVs
+                ivFieldName = ivNames{i};
+                for w = 1:numWells
+                    wells(w).(ivFieldName) = struct();
+                end
+            end
             
             % Fit wells (sequential for debugging)
             if obj.config.boltzmann.useParallel && numWells > 1
                 obj.logger.logWarning('⚠ Parallel processing enabled - errors may be hidden!');
                 wells = obj.fitWellsParallel(wells, filteredData.wellIDs, voltages, ...
-                    iv1Data, iv2Data, ivUsed, protocolType, dataType, dataUnits);
+                    ivDataArray, ivNames, ivUsed, protocolType, dataType, dataUnits);
             else
                 obj.logger.logInfo('Using sequential processing for fitting (better error visibility)');
                 wells = obj.fitWellsSequential(wells, filteredData.wellIDs, voltages, ...
-                    iv1Data, iv2Data, ivUsed, protocolType, dataType, dataUnits);
+                    ivDataArray, ivNames, ivUsed, protocolType, dataType, dataUnits);
             end
             
-
-            % Generate summary statistics from new nested structure
-            summary = obj.generateFitSummary(wells);
+            % Generate summary statistics from nested structure
+            summary = obj.generateFitSummary(wells, ivNames);
             
             % Package results
             fittedData = struct(...
@@ -112,20 +112,8 @@ classdef NanionBoltzmannFitter < handle
                 'numWells', numWells, ...
                 'protocol', protocolType, ...
                 'dataType', dataType, ...
-                'dataUnits', dataUnits);
-            
-            obj.logger.logInfo(sprintf('✓ Boltzmann fitting complete: %d Good, %d Acceptable, %d Poor, %d Failed', ...
-                summary.fitResults.good, summary.fitResults.acceptable, ...
-                summary.fitResults.poor, summary.fitResults.failed));
-            
-            % Package results
-            fittedData = struct(...
-                'wells', wells, ...
-                'summary', summary, ...
-                'numWells', numWells, ...
-                'protocol', protocolType, ...
-                'dataType', dataType, ...
-                'dataUnits', dataUnits);
+                'dataUnits', dataUnits, ...
+                'ivNames', {ivNames});
             
             obj.logger.logInfo(sprintf('✓ Boltzmann fitting complete: %d Good, %d Acceptable, %d Poor, %d Failed', ...
                 summary.fitResults.good, summary.fitResults.acceptable, ...
@@ -250,299 +238,193 @@ classdef NanionBoltzmannFitter < handle
     
     methods (Access = private)
         function wells = fitWellsSequential(obj, wells, wellIDs, voltages, ...
-            iv1Data, iv2Data, ivUsed, protocolType, dataType, dataUnits)
-        %FITWELLSSEQUENTIAL Fit ALL available IVs for each well
-        
-        numWells = length(wellIDs);
-        errorCount = 0;
-        hasIV2 = ~isempty(iv2Data);
-        
-        for wellIdx = 1:numWells
-            % Fit IV1 (always available)
-            iv1_data = iv1Data(wellIdx, :);
-            iv1Fit = obj.fitSingleWell(voltages, iv1_data, protocolType, 'iv1');
+        ivDataArray, ivNames, ivUsed, protocolType, dataType, dataUnits)
+            %FITWELLSSEQUENTIAL Fit ALL available IVs for each well (DYNAMIC)
             
-            % Fit IV2 (if available)
-            if hasIV2
-                iv2_data = iv2Data(wellIdx, :);
-                iv2Fit = obj.fitSingleWell(voltages, iv2_data, protocolType, 'iv2');
-            else
-                iv2Fit = [];
-            end
+            numWells = length(wellIDs);
+            numIVs = length(ivNames);
+            errorCount = 0;
             
-            % Track errors from either IV
-            if ~isempty(iv1Fit.fitError)
-                errorCount = errorCount + 1;
-                if errorCount <= 3
-                    obj.logger.logError(sprintf('Well %d (%s) IV1: %s', ...
-                        wellIdx, wellIDs(wellIdx), iv1Fit.fitError));
+            obj.logger.logInfo(sprintf('Fitting %d wells × %d IVs = %d total fits', ...
+                numWells, numIVs, numWells * numIVs));
+            
+            for wellIdx = 1:numWells
+                % Fit all available IVs for this well
+                for ivIdx = 1:numIVs
+                    ivName = ivNames{ivIdx};
+                    ivData = ivDataArray{ivIdx};
+                    
+                    % Get data for this well
+                    iv_data = ivData(wellIdx, :);
+                    
+                    % Fit this IV
+                    ivFit = obj.fitSingleWell(voltages, iv_data, protocolType, ivName);
+                    
+                    % Track errors
+                    if ~isempty(ivFit.fitError)
+                        errorCount = errorCount + 1;
+                        if errorCount <= 5  % Show first 5 errors
+                            obj.logger.logError(sprintf('Well %d (%s) %s: %s', ...
+                                wellIdx, wellIDs(wellIdx), upper(ivName), ivFit.fitError));
+                        end
+                    end
+                    
+                    % Store fit results
+                    wells(wellIdx).(ivName) = struct(...
+                        'data', iv_data, ...
+                        'validPoints', ivFit.validPoints, ...
+                        'fitParams', ivFit.fitParams, ...
+                        'fittedCurve', ivFit.fittedCurve, ...
+                        'fitQuality', ivFit.fitQuality, ...
+                        'fitError', ivFit.fitError);
+                end
+                
+                % Store well metadata (once per well)
+                wells(wellIdx).wellID = wellIDs(wellIdx);
+                wells(wellIdx).protocol = protocolType;
+                wells(wellIdx).ivUsed = ivUsed(wellIdx);
+                wells(wellIdx).voltages = voltages;
+                wells(wellIdx).dataType = dataType;
+                wells(wellIdx).dataUnits = dataUnits;
+                
+                % Progress logging
+                if mod(wellIdx, 10) == 0 || wellIdx == numWells
+                    obj.logger.logInfo(sprintf('Fitting progress: %d/%d wells (%d errors)', ...
+                        wellIdx, numWells, errorCount));
                 end
             end
             
-            if hasIV2 && ~isempty(iv2Fit.fitError)
-                errorCount = errorCount + 1;
-                if errorCount <= 3
-                    obj.logger.logError(sprintf('Well %d (%s) IV2: %s', ...
-                        wellIdx, wellIDs(wellIdx), iv2Fit.fitError));
-                end
-            end
-            
-            % Store results - BOTH IVs
-            wells(wellIdx).wellID = wellIDs(wellIdx);
-            wells(wellIdx).protocol = protocolType;
-            wells(wellIdx).ivUsed = ivUsed(wellIdx);  % For quality reference
-            wells(wellIdx).voltages = voltages;
-            wells(wellIdx).dataType = dataType;
-            wells(wellIdx).dataUnits = dataUnits;
-            
-            % Store IV1 fit
-            wells(wellIdx).iv1 = struct(...
-                'data', iv1_data, ...
-                'validPoints', iv1Fit.validPoints, ...
-                'fitParams', iv1Fit.fitParams, ...
-                'fittedCurve', iv1Fit.fittedCurve, ...
-                'fitQuality', iv1Fit.fitQuality, ...
-                'fitError', iv1Fit.fitError);
-            
-            % Store IV2 fit (if exists)
-            if hasIV2
-                wells(wellIdx).iv2 = struct(...
-                    'data', iv2_data, ...
-                    'validPoints', iv2Fit.validPoints, ...
-                    'fitParams', iv2Fit.fitParams, ...
-                    'fittedCurve', iv2Fit.fittedCurve, ...
-                    'fitQuality', iv2Fit.fitQuality, ...
-                    'fitError', iv2Fit.fitError);
+            totalFits = numWells * numIVs;
+            if errorCount > 0
+                obj.logger.logWarning(sprintf('⚠ Total fitting errors: %d/%d fits (%.1f%%)', ...
+                    errorCount, totalFits, 100 * errorCount / totalFits));
             else
-                wells(wellIdx).iv2 = [];
-            end
-            
-            % Progress logging
-            if mod(wellIdx, 10) == 0 || wellIdx == numWells
-                obj.logger.logInfo(sprintf('Fitting progress: %d/%d wells (%d errors)', ...
-                    wellIdx, numWells, errorCount));
+                obj.logger.logInfo(sprintf('✓ All %d fits completed successfully', totalFits));
             end
         end
-        
-        if errorCount > 0
-            obj.logger.logWarning(sprintf('⚠ Total fitting errors: %d/%d IVs', ...
-                errorCount, numWells * (1 + hasIV2)));
-        end
-    end
         
              function wells = fitWellsParallel(obj, wells, wellIDs, voltages, ...
-                    iv1Data, iv2Data, ivUsed, protocolType, dataType, dataUnits)
-                %FITWELLSPARALLEL Fit wells in parallel (errors harder to debug)
+                    ivDataArray, ivNames, ivUsed, protocolType, dataType, dataUnits)
+                %FITWELLSPARALLEL Fit wells in parallel (DYNAMIC IV support)
                 
                 numWells = length(wellIDs);
+                numIVs = length(ivNames);
                 config = obj.config;
                 
                 obj.logger.logWarning('⚠ Using parallel processing - detailed errors may be suppressed');
-                
-                % Pre-declare for parfor - MUST be before parfor loop
-                hasIV2 = ~isempty(iv2Data);
+                obj.logger.logInfo(sprintf('Fitting %d wells × %d IVs = %d total fits in parallel', ...
+                    numWells, numIVs, numWells * numIVs));
                 
                 parfor wellIdx = 1:numWells
-                    % Fit IV1
-                    iv1_data = iv1Data(wellIdx, :);
-                    iv1Fit = NanionBoltzmannFitter.fitSingleWellStatic(...
-                        voltages, iv1_data, protocolType, 'iv1', config);
-                    
-                    % Fit IV2 if available
-                    if hasIV2
-                        iv2_data = iv2Data(wellIdx, :);
-                        iv2Fit = NanionBoltzmannFitter.fitSingleWellStatic(...
-                            voltages, iv2_data, protocolType, 'iv2', config);
-                    else
-                        iv2Fit = struct(...
-                            'fitError', 'No IV2 data', ...
-                            'fittedCurve', [], ...
-                            'fitParams', struct('converged', false), ...
-                            'fitQuality', 'Failed', ...
-                            'validPoints', 0);
+                    % Fit all IVs for this well
+                    for ivIdx = 1:numIVs
+                        ivName = ivNames{ivIdx};
+                        ivData = ivDataArray{ivIdx};
+                        iv_data = ivData(wellIdx, :);
+                        
+                        % Fit this IV
+                        ivFit = NanionBoltzmannFitter.fitSingleWellStatic(...
+                            voltages, iv_data, protocolType, ivName, config);
+                        
+                        % Store results
+                        wells(wellIdx).(ivName) = struct(...
+                            'data', iv_data, ...
+                            'validPoints', ivFit.validPoints, ...
+                            'fitParams', ivFit.fitParams, ...
+                            'fittedCurve', ivFit.fittedCurve, ...
+                            'fitQuality', ivFit.fitQuality, ...
+                            'fitError', ivFit.fitError);
                     end
                     
-                    % Store results - BOTH IVs
+                    % Store well metadata
                     wells(wellIdx).wellID = wellIDs(wellIdx);
                     wells(wellIdx).protocol = protocolType;
                     wells(wellIdx).ivUsed = ivUsed(wellIdx);
                     wells(wellIdx).voltages = voltages;
                     wells(wellIdx).dataType = dataType;
                     wells(wellIdx).dataUnits = dataUnits;
-                    
-                    % Store IV1
-                    wells(wellIdx).iv1 = struct(...
-                        'data', iv1_data, ...
-                        'validPoints', iv1Fit.validPoints, ...
-                        'fitParams', iv1Fit.fitParams, ...
-                        'fittedCurve', iv1Fit.fittedCurve, ...
-                        'fitQuality', iv1Fit.fitQuality, ...
-                        'fitError', iv1Fit.fitError);
-                    
-                    % Store IV2
-                    if hasIV2
-                        wells(wellIdx).iv2 = struct(...
-                            'data', iv2_data, ...
-                            'validPoints', iv2Fit.validPoints, ...
-                            'fitParams', iv2Fit.fitParams, ...
-                            'fittedCurve', iv2Fit.fittedCurve, ...
-                            'fitQuality', iv2Fit.fitQuality, ...
-                            'fitError', iv2Fit.fitError);
-                    else
-                        wells(wellIdx).iv2 = [];
-                    end
                 end
                 
-                obj.logger.logInfo(sprintf('Parallel fitting complete: %d wells processed', numWells));
+                obj.logger.logInfo(sprintf('Parallel fitting complete: %d wells × %d IVs processed', ...
+                    numWells, numIVs));
             end
 
-        function summary = generateFitSummary(obj, wells)
-            %GENERATEFITSUMMARY Generate summary statistics from nested IV structure
-            %   Counts fit quality across both IV1 and IV2
+         function summary = generateFitSummary(obj, wells, ivNames)
+            %GENERATEFITSUMMARY Generate summary statistics from nested IV structure (DYNAMIC)
+            %   Counts fit quality across all available IVs
             
             numWells = length(wells);
+            numIVs = length(ivNames);
             
-            % Count fit quality for IV1 and IV2 separately
-            iv1_good = 0;
-            iv1_acceptable = 0;
-            iv1_poor = 0;
-            iv1_failed = 0;
+            % Initialize counters for each IV
+            ivResults = struct();
+            for i = 1:numIVs
+                ivName = ivNames{i};
+                ivResults.(ivName) = struct('good', 0, 'acceptable', 0, 'poor', 0, 'failed', 0);
+            end
             
-            iv2_good = 0;
-            iv2_acceptable = 0;
-            iv2_poor = 0;
-            iv2_failed = 0;
-
-
-            % Count IV3 and IV4 if they exist
-            iv3_good = 0; iv3_acceptable = 0; iv3_poor = 0; iv3_failed = 0;
-            iv4_good = 0; iv4_acceptable = 0; iv4_poor = 0; iv4_failed = 0;
-            
-            for i = 1:numWells
-                % Count IV1 results
-                if ~isempty(wells(i).iv1) && isfield(wells(i).iv1, 'fitQuality')
-                    switch wells(i).iv1.fitQuality
-                        case 'Good'
-                            iv1_good = iv1_good + 1;
-                        case 'Acceptable'
-                            iv1_acceptable = iv1_acceptable + 1;
-                        case 'Poor'
-                            iv1_poor = iv1_poor + 1;
-                        case 'Failed'
-                            iv1_failed = iv1_failed + 1;
-                    end
-                else
-                    iv1_failed = iv1_failed + 1;
-                end
-                
-                % Count IV2 results (if exists)
-                if ~isempty(wells(i).iv2) && isfield(wells(i).iv2, 'fitQuality')
-                    switch wells(i).iv2.fitQuality
-                        case 'Good'
-                            iv2_good = iv2_good + 1;
-                        case 'Acceptable'
-                            iv2_acceptable = iv2_acceptable + 1;
-                        case 'Poor'
-                            iv2_poor = iv2_poor + 1;
-                        case 'Failed'
-                            iv2_failed = iv2_failed + 1;
+            % Count quality for each IV
+            for w = 1:numWells
+                for i = 1:numIVs
+                    ivName = ivNames{i};
+                    
+                    if isfield(wells(w), ivName) && ~isempty(wells(w).(ivName)) && ...
+                       isfield(wells(w).(ivName), 'fitQuality')
+                        
+                        quality = wells(w).(ivName).fitQuality;
+                        
+                        switch quality
+                            case 'Good'
+                                ivResults.(ivName).good = ivResults.(ivName).good + 1;
+                            case 'Acceptable'
+                                ivResults.(ivName).acceptable = ivResults.(ivName).acceptable + 1;
+                            case 'Poor'
+                                ivResults.(ivName).poor = ivResults.(ivName).poor + 1;
+                            case 'Failed'
+                                ivResults.(ivName).failed = ivResults.(ivName).failed + 1;
+                        end
+                    else
+                        ivResults.(ivName).failed = ivResults.(ivName).failed + 1;
                     end
                 end
             end
             
-            for i = 1:numWells
-                % Count IV3 results (if exists)
-                if isfield(wells(i), 'iv3') && ~isempty(wells(i).iv3) && isfield(wells(i).iv3, 'fitQuality')
-                    switch wells(i).iv3.fitQuality
-                        case 'Good'
-                            iv3_good = iv3_good + 1;
-                        case 'Acceptable'
-                            iv3_acceptable = iv3_acceptable + 1;
-                        case 'Poor'
-                            iv3_poor = iv3_poor + 1;
-                        case 'Failed'
-                            iv3_failed = iv3_failed + 1;
-                    end
-                end
-                
-                % Count IV4 results (if exists)
-                if isfield(wells(i), 'iv4') && ~isempty(wells(i).iv4) && isfield(wells(i).iv4, 'fitQuality')
-                    switch wells(i).iv4.fitQuality
-                        case 'Good'
-                            iv4_good = iv4_good + 1;
-                        case 'Acceptable'
-                            iv4_acceptable = iv4_acceptable + 1;
-                        case 'Poor'
-                            iv4_poor = iv4_poor + 1;
-                        case 'Failed'
-                            iv4_failed = iv4_failed + 1;
-                    end
-                end
+            % Calculate combined totals
+            total_good = 0;
+            total_acceptable = 0;
+            total_poor = 0;
+            total_failed = 0;
+            
+            for i = 1:numIVs
+                ivName = ivNames{i};
+                total_good = total_good + ivResults.(ivName).good;
+                total_acceptable = total_acceptable + ivResults.(ivName).acceptable;
+                total_poor = total_poor + ivResults.(ivName).poor;
+                total_failed = total_failed + ivResults.(ivName).failed;
             end
             
-            % Update combined totals to include iv3/iv4
-            total_good = iv1_good + iv2_good + iv3_good + iv4_good;
-            total_acceptable = iv1_acceptable + iv2_acceptable + iv3_acceptable + iv4_acceptable;
-            total_poor = iv1_poor + iv2_poor + iv3_poor + iv4_poor;
-            total_failed = iv1_failed + iv2_failed + iv3_failed + iv4_failed;
-            
-            % Build summary structure
+            % Build summary structure with combined + per-IV results
             summary = struct(...
                 'fitResults', struct(...
                     'good', total_good, ...
                     'acceptable', total_acceptable, ...
                     'poor', total_poor, ...
                     'failed', total_failed), ...
-                'iv1Results', struct(...
-                    'good', iv1_good, ...
-                    'acceptable', iv1_acceptable, ...
-                    'poor', iv1_poor, ...
-                    'failed', iv1_failed), ...
-                'iv2Results', struct(...
-                    'good', iv2_good, ...
-                    'acceptable', iv2_acceptable, ...
-                    'poor', iv2_poor, ...
-                    'failed', iv2_failed), ...
-                'iv3Results', struct(...
-                    'good', iv3_good, ...
-                    'acceptable', iv3_acceptable, ...
-                    'poor', iv3_poor, ...
-                    'failed', iv3_failed), ...
-                'iv4Results', struct(...
-                    'good', iv4_good, ...
-                    'acceptable', iv4_acceptable, ...
-                    'poor', iv4_poor, ...
-                    'failed', iv4_failed), ...
                 'numWells', numWells);
             
-            obj.logger.logInfo(sprintf('  IV1: %d Good, %d Acceptable, %d Poor, %d Failed', ...
-                iv1_good, iv1_acceptable, iv1_poor, iv1_failed));
-            
-            if iv2_good + iv2_acceptable + iv2_poor + iv2_failed > 0
-                obj.logger.logInfo(sprintf('  IV2: %d Good, %d Acceptable, %d Poor, %d Failed', ...
-                    iv2_good, iv2_acceptable, iv2_poor, iv2_failed));
+            % Add per-IV results dynamically
+            for i = 1:numIVs
+                ivName = ivNames{i};
+                fieldName = [ivName 'Results'];
+                summary.(fieldName) = ivResults.(ivName);
             end
             
-            % Check if iv3 results exist
-            if isfield(summary, 'iv3Results')
-                iv3_total = summary.iv3Results.good + summary.iv3Results.acceptable + ...
-                            summary.iv3Results.poor + summary.iv3Results.failed;
-                if iv3_total > 0
-                    obj.logger.logInfo(sprintf('  IV3: %d Good, %d Acceptable, %d Poor, %d Failed', ...
-                        summary.iv3Results.good, summary.iv3Results.acceptable, ...
-                        summary.iv3Results.poor, summary.iv3Results.failed));
-                end
-            end
-            
-            % Check if iv4 results exist
-            if isfield(summary, 'iv4Results')
-                iv4_total = summary.iv4Results.good + summary.iv4Results.acceptable + ...
-                            summary.iv4Results.poor + summary.iv4Results.failed;
-                if iv4_total > 0
-                    obj.logger.logInfo(sprintf('  IV4: %d Good, %d Acceptable, %d Poor, %d Failed', ...
-                        summary.iv4Results.good, summary.iv4Results.acceptable, ...
-                        summary.iv4Results.poor, summary.iv4Results.failed));
-                end
+            % Log per-IV breakdown
+            for i = 1:numIVs
+                ivName = ivNames{i};
+                ivRes = ivResults.(ivName);
+                obj.logger.logInfo(sprintf('  %s: %d Good, %d Acceptable, %d Poor, %d Failed', ...
+                    upper(ivName), ivRes.good, ivRes.acceptable, ivRes.poor, ivRes.failed));
             end
         end
     end

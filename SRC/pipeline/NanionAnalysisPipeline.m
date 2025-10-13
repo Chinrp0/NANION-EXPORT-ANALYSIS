@@ -12,6 +12,7 @@ classdef NanionAnalysisPipeline < handle
         fileDetector
         dataExtractor
         results
+        cache
     end
     
     methods
@@ -28,6 +29,25 @@ classdef NanionAnalysisPipeline < handle
             obj.fileDetector = NanionFileDetector(obj.logger);
             obj.dataExtractor = NanionDataExtractor(obj.config, obj.logger);
             obj.results = {};
+        end
+
+        function cachedData = getCachedData(obj, filePath, dataType)
+            % Generate cache key from file path + modification time
+            fileInfo = dir(filePath);
+            cacheKey = sprintf('%s_%s_%.0f', filePath, dataType, fileInfo.datenum);
+            
+            if isKey(obj.cache, cacheKey)
+                obj.logger.logInfo('✓ Using cached data');
+                cachedData = obj.cache(cacheKey);
+            else
+                cachedData = [];
+            end
+        end
+        
+        function setCachedData(obj, filePath, dataType, data)
+            fileInfo = dir(filePath);
+            cacheKey = sprintf('%s_%s_%.0f', filePath, dataType, fileInfo.datenum);
+            obj.cache(cacheKey) = data;
         end
         
         function results = runAnalysis(obj, filePaths, outputDir)
@@ -172,7 +192,16 @@ classdef NanionAnalysisPipeline < handle
             %PROCESSSINGLEFILE Core processing with statistics and export
             
             obj.logger.logInfo(sprintf('Processing: %s', fileInfo.name));
-            
+
+            % In processSingleFile():
+            cachedRaw = obj.getCachedData(fileInfo.path, 'rawData');
+            if isempty(cachedRaw)
+                rawData = obj.ioManager.readFile(fileInfo.path);
+                obj.setCachedData(fileInfo.path, 'rawData', rawData);
+            else
+                rawData = cachedRaw;
+            end
+                        
             try
                 % Step 1: Read and parse
                 obj.logger.logInfo('Step 1: Reading and parsing data...');
@@ -212,11 +241,24 @@ classdef NanionAnalysisPipeline < handle
                 tableBuilder = NanionSummaryTableBuilder(obj.config, obj.logger);
                 summaryTable = tableBuilder.buildSummaryTable(filteredData, fittedData, fileInfo.name);
                 
-                % Step 7: Generate summary figures (ADD THIS)
+                % Step 7: Create output subdirectory for this file
+                [inputDir, ~, ~] = fileparts(fileInfo.path);
+                fileOutputDir = fullfile(inputDir, 'Analysis_Output', fileInfo.name);
+                if ~exist(fileOutputDir, 'dir')
+                    mkdir(fileOutputDir);
+                end
+                obj.logger.logInfo(sprintf('Output directory: %s', fileOutputDir));
+                
+                % Step 8: Generate summary figures - CORRECTED METHOD CALL
                 obj.logger.logInfo('Step 7: Generating summary figures...');
                 figureGenerator = NanionSummaryFigure(obj.config, obj.logger);
-                figures = figureGenerator.generateFigures(filteredData, fittedData, outputDir);
-                obj.logger.logInfo(sprintf('✓ Generated %d summary figures', length(figures)));
+                
+                % Call the correct method with all required parameters
+                [fig1, fig2] = figureGenerator.createSummaryFigures(...
+                    filteredData, fittedData, summaryTable, fileOutputDir, 0);
+                
+                figures = struct('fig1', fig1, 'fig2', fig2);
+                obj.logger.logInfo('✓ Generated 2 summary figures');
                 
                 % Create result structure
                 result = struct(...
@@ -229,8 +271,8 @@ classdef NanionAnalysisPipeline < handle
                     'figures', figures, ...
                     'processingSteps', {{'dataReading', 'measurementExtraction', ...
                                         'qualityFiltering', 'statisticsCalculation', ...
-                                        'boltzmannFitting', 'summaryTableBuilding', 'figureGeneration'}}, ...  % ← ADD 'figureGeneration'
-                    'outputDir', fullfile(outputDir, fileInfo.name));
+                                        'boltzmannFitting', 'summaryTableBuilding', 'figureGeneration'}}, ...
+                    'outputDir', fileOutputDir);
                                 
                 obj.logger.logInfo(sprintf('✓ Processing complete: %s', fileInfo.name));
                 
