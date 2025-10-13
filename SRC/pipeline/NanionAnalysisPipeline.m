@@ -1,6 +1,6 @@
 classdef NanionAnalysisPipeline < handle
     %NANIONANALYSISPIPELINE Main controller for electrophysiology analysis
-    %   UPDATED: Uses NanionXLSXExporter for comprehensive workbook export
+    %   UPDATED: Dynamic IV fitting, caching, subfolder output
     
     properties (Access = public)
         config
@@ -29,9 +29,11 @@ classdef NanionAnalysisPipeline < handle
             obj.fileDetector = NanionFileDetector(obj.logger);
             obj.dataExtractor = NanionDataExtractor(obj.config, obj.logger);
             obj.results = {};
+            obj.cache = containers.Map('KeyType', 'char', 'ValueType', 'any');  % CACHE INITIALIZATION
         end
 
         function cachedData = getCachedData(obj, filePath, dataType)
+            %GETCACHEDDATA Retrieve cached data if available
             % Generate cache key from file path + modification time
             fileInfo = dir(filePath);
             cacheKey = sprintf('%s_%s_%.0f', filePath, dataType, fileInfo.datenum);
@@ -45,6 +47,7 @@ classdef NanionAnalysisPipeline < handle
         end
         
         function setCachedData(obj, filePath, dataType, data)
+            %SETCACHEDDATA Store data in cache
             fileInfo = dir(filePath);
             cacheKey = sprintf('%s_%s_%.0f', filePath, dataType, fileInfo.datenum);
             obj.cache(cacheKey) = data;
@@ -192,20 +195,19 @@ classdef NanionAnalysisPipeline < handle
             %PROCESSSINGLEFILE Core processing with statistics and export
             
             obj.logger.logInfo(sprintf('Processing: %s', fileInfo.name));
-
-            % In processSingleFile():
-            cachedRaw = obj.getCachedData(fileInfo.path, 'rawData');
-            if isempty(cachedRaw)
-                rawData = obj.ioManager.readFile(fileInfo.path);
-                obj.setCachedData(fileInfo.path, 'rawData', rawData);
-            else
-                rawData = cachedRaw;
-            end
-                        
+            
             try
-                % Step 1: Read and parse
+                % Step 1: Read and parse (with caching)
                 obj.logger.logInfo('Step 1: Reading and parsing data...');
-                rawData = obj.ioManager.readFile(fileInfo.path);
+                
+                cachedRaw = obj.getCachedData(fileInfo.path, 'rawData');
+                if isempty(cachedRaw)
+                    rawData = obj.ioManager.readFile(fileInfo.path);
+                    obj.setCachedData(fileInfo.path, 'rawData', rawData);
+                else
+                    rawData = cachedRaw;
+                end
+                
                 parsedData = obj.ioManager.parseData(rawData, fileInfo.protocol);
                 parsedData.fileName = fileInfo.name;
                 
@@ -249,8 +251,8 @@ classdef NanionAnalysisPipeline < handle
                 end
                 obj.logger.logInfo(sprintf('Output directory: %s', fileOutputDir));
                 
-                % Step 8: Generate summary figures - CORRECTED METHOD CALL
-                obj.logger.logInfo('Step 7: Generating summary figures...');
+                % Step 8: Generate summary figures
+                obj.logger.logInfo('Step 8: Generating summary figures...');
                 figureGenerator = NanionSummaryFigure(obj.config, obj.logger);
                 
                 % Call the correct method with all required parameters
