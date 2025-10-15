@@ -99,6 +99,109 @@ classdef NanionXLSXExporter < handle
             obj.logger.logInfo('✓ All workbooks exported successfully');
         end
     end
+
+    methods (Access = public)
+            function formatSheet(obj, excelFile, sheetName, dataTable)
+            %FORMATSHEET Apply formatting: frozen header, auto-size, conditional formatting
+            
+            try
+                % Use Excel COM automation for advanced formatting
+                if ispc  % Windows only
+                    obj.formatSheetWindows(excelFile, sheetName, dataTable);
+                else
+                    obj.logger.logDebug('Advanced formatting only available on Windows');
+                end
+            catch ME
+                obj.logger.logDebug(sprintf('Formatting warning: %s', ME.message));
+            end
+        end
+        
+        function createPerIVSheets(obj, excelFile, summaryTable)
+            %CREATEPERIVSHEETS Create one sheet per IV
+            
+            ivNumbers = unique(summaryTable.IV_Number);
+            
+            for i = 1:length(ivNumbers)
+                ivNum = ivNumbers(i);
+                sheetName = sprintf('IV%d', ivNum);
+                
+                ivTable = summaryTable(summaryTable.IV_Number == ivNum, :);
+                
+                writetable(ivTable, excelFile, 'Sheet', sheetName, 'WriteMode', 'append');
+                obj.formatSheet(excelFile, sheetName, ivTable);
+                
+                obj.logger.logDebug(sprintf('  Created sheet: %s (%d rows)', sheetName, height(ivTable)));
+            end
+        end
+        
+        function createGroupedSheets(obj, excelFile, summaryTable)
+            %CREATEGROUPEDSHEETS Create sheets grouped by Cell_Type + Compound + Concentration
+            
+            if ~all(ismember({'Cell_Type', 'Compound', 'Concentration_uM'}, summaryTable.Properties.VariableNames))
+                obj.logger.logWarning('Missing grouping columns - skipping grouped sheets');
+                return;
+            end
+            
+            % Get unique groups
+            groups = summaryTable(:, {'Cell_Type', 'Compound', 'Concentration_uM'});
+            [uniqueGroups, ~, groupIdx] = unique(groups, 'rows');
+            
+            obj.logger.logDebug(sprintf('Creating %d grouped sheets...', height(uniqueGroups)));
+            
+            for i = 1:height(uniqueGroups)
+                groupMask = (groupIdx == i);
+                groupTable = summaryTable(groupMask, :);
+                
+                % Create sanitized sheet name
+                cellType = char(uniqueGroups.Cell_Type(i));
+                compound = char(uniqueGroups.Compound(i));
+                conc = uniqueGroups.Concentration_uM(i);
+                
+                sheetName = obj.createGroupSheetName(cellType, compound, conc);
+                
+                try
+                    writetable(groupTable, excelFile, 'Sheet', sheetName, 'WriteMode', 'append');
+                    obj.formatSheet(excelFile, sheetName, groupTable);
+                    obj.logger.logDebug(sprintf('  Created group: %s (%d rows)', sheetName, height(groupTable)));
+                catch ME
+                    obj.logger.logWarning(sprintf('Failed to create group sheet: %s', ME.message));
+                end
+            end
+        end
+        
+        function createAggregatedSummaryStats(obj, excelFile, summaryTables, fileNames)
+            %CREATEAGGREGATEDSUMMARYSTATS Create summary for multiple files
+            
+            metrics = {};
+            values = {};
+            
+            metrics{end+1} = 'Aggregated Analysis'; values{end+1} = '';
+            metrics{end+1} = 'Export Date'; values{end+1} = datestr(now);
+            metrics{end+1} = ''; values{end+1} = '';
+            
+            metrics{end+1} = 'Total Files'; values{end+1} = sprintf('%d', length(summaryTables));
+            totalRows = sum(cellfun(@height, summaryTables));
+            metrics{end+1} = 'Total Rows'; values{end+1} = sprintf('%d', totalRows);
+            metrics{end+1} = ''; values{end+1} = '';
+            
+            metrics{end+1} = 'Individual Files'; values{end+1} = '';
+            for i = 1:length(fileNames)
+                [~, baseName, ~] = fileparts(fileNames{i});
+                metrics{end+1} = sprintf('  %s', baseName);
+                values{end+1} = sprintf('%d rows', height(summaryTables{i}));
+            end
+            
+            statsTable = table(metrics', values', 'VariableNames', {'Metric', 'Value'});
+            writetable(statsTable, excelFile, 'Sheet', 'Summary_Statistics', 'WriteMode', 'overwritesheet');
+            obj.formatSheet(excelFile, 'Summary_Statistics', statsTable);
+        end
+        
+        function createAggregatedFitQualitySheet(obj, excelFile, aggregatedTable, fileNames)
+            %CREATEAGGREGATEDFITQUALITYSHEET Fit quality for aggregated data
+            
+            obj.createFitQualitySheet(excelFile, aggregatedTable, []);
+        end
+    end
     
     methods (Access = private)
         function createSummaryStatsSheet(obj, excelFile, summaryTable, filteredData, fittedData, fileName)
@@ -188,58 +291,7 @@ classdef NanionXLSXExporter < handle
             statsTable = table(metrics', values', 'VariableNames', {'Metric', 'Value'});
         end
         
-        function createPerIVSheets(obj, excelFile, summaryTable)
-            %CREATEPERIVSHEETS Create one sheet per IV
-            
-            ivNumbers = unique(summaryTable.IV_Number);
-            
-            for i = 1:length(ivNumbers)
-                ivNum = ivNumbers(i);
-                sheetName = sprintf('IV%d', ivNum);
-                
-                ivTable = summaryTable(summaryTable.IV_Number == ivNum, :);
-                
-                writetable(ivTable, excelFile, 'Sheet', sheetName, 'WriteMode', 'append');
-                obj.formatSheet(excelFile, sheetName, ivTable);
-                
-                obj.logger.logDebug(sprintf('  Created sheet: %s (%d rows)', sheetName, height(ivTable)));
-            end
-        end
         
-        function createGroupedSheets(obj, excelFile, summaryTable)
-            %CREATEGROUPEDSHEETS Create sheets grouped by Cell_Type + Compound + Concentration
-            
-            if ~all(ismember({'Cell_Type', 'Compound', 'Concentration_uM'}, summaryTable.Properties.VariableNames))
-                obj.logger.logWarning('Missing grouping columns - skipping grouped sheets');
-                return;
-            end
-            
-            % Get unique groups
-            groups = summaryTable(:, {'Cell_Type', 'Compound', 'Concentration_uM'});
-            [uniqueGroups, ~, groupIdx] = unique(groups, 'rows');
-            
-            obj.logger.logDebug(sprintf('Creating %d grouped sheets...', height(uniqueGroups)));
-            
-            for i = 1:height(uniqueGroups)
-                groupMask = (groupIdx == i);
-                groupTable = summaryTable(groupMask, :);
-                
-                % Create sanitized sheet name
-                cellType = char(uniqueGroups.Cell_Type(i));
-                compound = char(uniqueGroups.Compound(i));
-                conc = uniqueGroups.Concentration_uM(i);
-                
-                sheetName = obj.createGroupSheetName(cellType, compound, conc);
-                
-                try
-                    writetable(groupTable, excelFile, 'Sheet', sheetName, 'WriteMode', 'append');
-                    obj.formatSheet(excelFile, sheetName, groupTable);
-                    obj.logger.logDebug(sprintf('  Created group: %s (%d rows)', sheetName, height(groupTable)));
-                catch ME
-                    obj.logger.logWarning(sprintf('Failed to create group sheet: %s', ME.message));
-                end
-            end
-        end
         
         function sheetName = createGroupSheetName(obj, cellType, compound, conc)
             %CREATEGROUPSHEETNAME Create valid Excel sheet name (max 31 chars)
@@ -357,53 +409,8 @@ classdef NanionXLSXExporter < handle
             obj.formatSheet(excelFile, 'Fit_Quality_Report', fitQualityTable);
         end
         
-        function createAggregatedSummaryStats(obj, excelFile, summaryTables, fileNames)
-            %CREATEAGGREGATEDSUMMARYSTATS Create summary for multiple files
-            
-            metrics = {};
-            values = {};
-            
-            metrics{end+1} = 'Aggregated Analysis'; values{end+1} = '';
-            metrics{end+1} = 'Export Date'; values{end+1} = datestr(now);
-            metrics{end+1} = ''; values{end+1} = '';
-            
-            metrics{end+1} = 'Total Files'; values{end+1} = sprintf('%d', length(summaryTables));
-            totalRows = sum(cellfun(@height, summaryTables));
-            metrics{end+1} = 'Total Rows'; values{end+1} = sprintf('%d', totalRows);
-            metrics{end+1} = ''; values{end+1} = '';
-            
-            metrics{end+1} = 'Individual Files'; values{end+1} = '';
-            for i = 1:length(fileNames)
-                [~, baseName, ~] = fileparts(fileNames{i});
-                metrics{end+1} = sprintf('  %s', baseName);
-                values{end+1} = sprintf('%d rows', height(summaryTables{i}));
-            end
-            
-            statsTable = table(metrics', values', 'VariableNames', {'Metric', 'Value'});
-            writetable(statsTable, excelFile, 'Sheet', 'Summary_Statistics', 'WriteMode', 'overwritesheet');
-            obj.formatSheet(excelFile, 'Summary_Statistics', statsTable);
-        end
         
-        function createAggregatedFitQualitySheet(obj, excelFile, aggregatedTable, fileNames)
-            %CREATEAGGREGATEDFITQUALITYSHEET Fit quality for aggregated data
-            
-            obj.createFitQualitySheet(excelFile, aggregatedTable, []);
-        end
         
-        function formatSheet(obj, excelFile, sheetName, dataTable)
-            %FORMATSHEET Apply formatting: frozen header, auto-size, conditional formatting
-            
-            try
-                % Use Excel COM automation for advanced formatting
-                if ispc  % Windows only
-                    obj.formatSheetWindows(excelFile, sheetName, dataTable);
-                else
-                    obj.logger.logDebug('Advanced formatting only available on Windows');
-                end
-            catch ME
-                obj.logger.logDebug(sprintf('Formatting warning: %s', ME.message));
-            end
-        end
         
         function formatSheetWindows(obj, excelFile, sheetName, dataTable)
             %FORMATSHEETWINDOWS Apply Excel formatting using COM (Windows only)
