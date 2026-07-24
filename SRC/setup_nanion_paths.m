@@ -39,6 +39,7 @@ function setup_nanion_paths(verbose)
         'analysis',   % Data extraction and filtering
         'fitting',    % Boltzmann fitting
         'plotting',   % Visualization
+        'qc',         % QC review decisions/session
         'pipeline',   % Main pipeline orchestration
         'detection'   % Protocol detection (if exists)
     };

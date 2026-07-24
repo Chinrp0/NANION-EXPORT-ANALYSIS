@@ -648,7 +648,7 @@ classdef NanionAnalysisPipeline < handle
                     ['Cannot locate repository root. Missing classes: ' strjoin(missingComponents, ', ')]);
             end
             
-            requiredDirs = {'config', 'utils', 'io', 'analysis', 'fitting', 'plotting', 'pipeline', 'detection'};
+            requiredDirs = {'config', 'utils', 'io', 'analysis', 'fitting', 'plotting', 'qc', 'pipeline', 'detection'};
             
             for i = 1:length(requiredDirs)
                 dirPath = fullfile(repoRoot, requiredDirs{i});

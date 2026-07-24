@@ -30,6 +30,9 @@ classdef NanionConfig < handle
         
         % Protocol detection parameters
         protocols
+
+        % QC review workflow parameters
+        qc
     end
     
     methods
@@ -82,6 +85,16 @@ classdef NanionConfig < handle
         
         function value = get.protocols(obj)
             value = obj.configData.protocols;
+        end
+
+        function value = get.qc(obj)
+            if isfield(obj.configData, 'qc')
+                value = obj.configData.qc;
+            else
+                % Backward-compatible default for configs loaded before qc existed
+                value = struct('enableReview', false, ...
+                    'reviewMode', 'blocking', 'decisionStore', 'sidecar');
+            end
         end
         
         function updateParameter(obj, category, parameter, value)
@@ -220,6 +233,12 @@ classdef NanionConfig < handle
                     'inactDataCol', [9, 16, 23], ...
                     'actDataCol', [10, 17, 24], ...
                     'markerKeywords', {{'Inact', 'Act'}}));
+
+            % QC review workflow (both options built; chosen here)
+            obj.configData.qc = struct(...
+                'enableReview', false, ...       % master on/off for the review step
+                'reviewMode', 'blocking', ...    % 'blocking' (pause pipeline) | 'standalone' (review saved results)
+                'decisionStore', 'sidecar');     % 'sidecar' (file per raw file) | 'central' (one store per batch)
         end
         
         function loadConfigFromFile(obj, configPath)
@@ -324,7 +343,15 @@ classdef NanionConfig < handle
                 validMethods = {'readcell'};
                 assert(ischar(p.io.readMethod) && ismember(p.io.readMethod, validMethods), ...
                     'readMethod must be readcell');
-                    
+
+                % QC review parameters
+                if isfield(p, 'qc')
+                    assert(ismember(lower(p.qc.reviewMode), {'blocking', 'standalone'}), ...
+                        'qc.reviewMode must be blocking or standalone');
+                    assert(ismember(lower(p.qc.decisionStore), {'sidecar', 'central'}), ...
+                        'qc.decisionStore must be sidecar or central');
+                end
+
                 obj.isValidated = true;
                 
             catch ME
