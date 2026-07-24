@@ -182,9 +182,13 @@ classdef NanionIOManager < handle
             
             numCols = size(rawData, 2);
             combinedHeaders = arrayfun(@(x) sprintf('Col_%d', x), 1:numCols, 'UniformOutput', false);
-            
+
+            % Wrap the cell in braces so struct() builds ONE scalar struct with a
+            % cell field, not a 1xN struct array. Without this, headers.combined
+            % expands to a comma-separated list and length(headers.combined) throws
+            % "Too many input arguments" in createDataTable.
             headers = struct(...
-                'combined', combinedHeaders);
+                'combined', {combinedHeaders});
             
             obj.logger.logInfo(sprintf('Generated %d column headers', numCols));
         end
