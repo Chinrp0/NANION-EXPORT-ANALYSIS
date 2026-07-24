@@ -399,9 +399,10 @@ classdef NanionSummaryFigure < handle
             obj.logger.logInfo(sprintf('✓ Cell type averages figure created (%d cell types)', numCellTypes));
         end
 
-        function figHandle = createAggregatedCellTypeAveragesFigure(obj, filteredData, fittedData, summaryTable, protocolType, includePoorFits)
+        function figHandles = createAggregatedCellTypeAveragesFigure(obj, filteredData, fittedData, summaryTable, protocolType, includePoorFits)
             %CREATEAGGREGATEDCELLTYPEAVERAGESFIGURE Generate Figure 2 from multiple files
-            %   Identical to createCellTypeAveragesFigure but for aggregated batch data
+            %   One panel per cell type in a grid, paginated across figures.
+            %   Returns an ARRAY of figure handles (one per page).
             
             if nargin < 6
                 includePoorFits = false;
@@ -427,7 +428,7 @@ classdef NanionSummaryFigure < handle
             
             if height(passingTable) == 0
                 obj.logger.logWarning('No passing fits for aggregated figure');
-                figHandle = [];
+                figHandles = gobjects(0);
                 return;
             end
             
@@ -437,215 +438,86 @@ classdef NanionSummaryFigure < handle
             obj.logger.logInfo(sprintf('Aggregated figure: %d cell types, %d total rows', ...
                 numCellTypes, height(passingTable)));
             
-            figHandle = figure('Position', [50, 50, 1800, 700], ...
-                'Color', 'w', 'Name', sprintf('Cell Type Averages - AGGREGATED (%s)', protocolType), ...
-                'Visible', 'off');
-            
-            allCompounds = unique(passingTable.Compound);
-            compoundColorMap = obj.assignCompoundColors(allCompounds);
-            
-            allHandles = [];
-            allLabels = {};
-            compoundsSeen = containers.Map('KeyType', 'char', 'ValueType', 'logical');
-            allStatsData = {};
-            
-            % Tight layout
-            leftMargin = 0.06;
-            rightMargin = 0.28;
-            bottomMargin = 0.12;
-            topMargin = 0.12;
-            hspace = 0.04;
-            
-            for ct = 1:numCellTypes
-                plotWidth = (1 - leftMargin - rightMargin - (numCellTypes-1)*hspace) / numCellTypes;
-                plotHeight = 1 - topMargin - bottomMargin;
-                
-                xPos = leftMargin + (ct-1) * (plotWidth + hspace);
-                yPos = bottomMargin;
-                
-                ax = axes('Position', [xPos, yPos, plotWidth, plotHeight]);
-                
-                cellType = uniqueCellTypes{ct};
-                cellTypeMask = strcmp(passingTable.Cell_Type, cellType);
-                cellTypeTable = passingTable(cellTypeMask, :);
-                
-                cellTypeCompounds = unique(cellTypeTable.Compound);
-                
-                % Track handles/labels for THIS subplot's legend
-                subplotHandles = [];
-                subplotLabels = {};
-                
-                hold on;
-                
-                for c = 1:length(cellTypeCompounds)
-                    compound = cellTypeCompounds{c};
-                    
-                    compoundMask = strcmp(cellTypeTable.Compound, compound);
-                    iv2Mask = compoundMask & (cellTypeTable.IV_Number == 2);
-                    iv3Mask = compoundMask & (cellTypeTable.IV_Number == 3);
-                    
-                    iv2Data = cellTypeTable(iv2Mask, :);
-                    iv3Data = cellTypeTable(iv3Mask, :);
-                    
-                    compoundColor = compoundColorMap(compound);
-                    
-                    % Plot IV2
-                    if height(iv2Data) > 0
-                        [h2, ~] = obj.plotCompoundCurve(filteredData, fittedData, iv2Data, ...
-                            voltages, protocolType, compound, compoundColor, '-', 'o', 'IV2');
-                        
-                        % Add to subplot-specific legend
-                        subplotHandles = [subplotHandles; h2];
-                        subplotLabels = [subplotLabels; {sprintf('%s (IV2, n=%d)', ...
-                            obj.formatCompoundName(compound), height(iv2Data))}];
-                        
-                        % Track globally for first occurrence
-                        compoundKey = char(compound);
-                        if ~isKey(compoundsSeen, compoundKey)
-                            allHandles = [allHandles; h2];
-                            allLabels = [allLabels; {obj.formatCompoundName(compound)}];
-                            compoundsSeen(compoundKey) = true;
-                        end
-                        
-                        V_mid_mean = mean(iv2Data.V_mid_mV, 'omitnan');
-                        V_mid_SEM = std(iv2Data.V_mid_mV, 'omitnan') / sqrt(height(iv2Data));
-                        allStatsData{end+1} = {char(cellType), obj.formatCompoundName(compound), ...
-                            height(iv2Data), V_mid_mean, V_mid_SEM, 'IV2'};
-                    end
-                    
-                    % Plot IV3
-                    if height(iv3Data) > 0
-                        [h3, ~] = obj.plotCompoundCurve(filteredData, fittedData, iv3Data, ...
-                            voltages, protocolType, compound, compoundColor, '--', 's', 'IV3');
-                        
-                        % Add to subplot-specific legend
-                        subplotHandles = [subplotHandles; h3];
-                        subplotLabels = [subplotLabels; {sprintf('%s (IV3, n=%d)', ...
-                            obj.formatCompoundName(compound), height(iv3Data))}];
-                        
-                        V_mid_mean = mean(iv3Data.V_mid_mV, 'omitnan');
-                        V_mid_SEM = std(iv3Data.V_mid_mV, 'omitnan') / sqrt(height(iv3Data));
-                        allStatsData{end+1} = {char(cellType), obj.formatCompoundName(compound), ...
-                            height(iv3Data), V_mid_mean, V_mid_SEM, 'IV3'};
-                    end
+            % Grid + pagination (tunable via config.plotting.panelCols/panelRows)
+            compoundColorMap = obj.assignCompoundColors(unique(passingTable.Compound));
+            panelCols = 2; panelRows = 2;
+            if isfield(obj.config.plotting, 'panelCols'); panelCols = obj.config.plotting.panelCols; end
+            if isfield(obj.config.plotting, 'panelRows'); panelRows = obj.config.plotting.panelRows; end
+            panelsPerPage = max(1, panelCols * panelRows);
+            numPages = ceil(numCellTypes / panelsPerPage);
+
+            figHandles = gobjects(numPages, 1);
+            for page = 1:numPages
+                fig = figure('Position', [50, 50, 640 * panelCols, 460 * panelRows], ...
+                    'Color', 'w', 'Visible', 'off', ...
+                    'Name', sprintf('Cell Type Averages - AGGREGATED (%s) %d/%d', protocolType, page, numPages));
+                figHandles(page) = fig;
+
+                firstCT = (page - 1) * panelsPerPage + 1;
+                lastCT = min(page * panelsPerPage, numCellTypes);
+                for k = firstCT:lastCT
+                    ax = subplot(panelRows, panelCols, k - firstCT + 1);
+                    obj.plotCellTypePanel(ax, uniqueCellTypes{k}, passingTable, filteredData, ...
+                        fittedData, voltages, protocolType, compoundColorMap);
                 end
-                
-                hold off;
-                
-                % Formatting
-                xlabel('Voltage (mV)', 'FontSize', 13, 'FontWeight', 'bold');
-                if ct == 1
-                    if strcmp(protocolType, 'activation')
-                        ylabel('Norm. Conductance (G/G_{max})', 'FontSize', 13, 'FontWeight', 'bold');
-                    else
-                        ylabel('Norm. Inactivation', 'FontSize', 13, 'FontWeight', 'bold');
-                    end
-                end
-                
-                title(sprintf('%s', char(cellType)), 'FontSize', 16, 'FontWeight', 'bold');
-                
-                grid on;
-                box on;
-                ylim([0 1.1]);
-                xlim([min(voltages) - 5, max(voltages) + 5]);
-                
-                ax.GridAlpha = 0.2;
-                ax.LineWidth = 1.2;
-                ax.FontSize = 12;
-                
-                % Add legend to each subplot
-                if ~isempty(subplotHandles)
-                    leg = legend(subplotHandles, subplotLabels, ...
-                        'Location', 'southeast', ...
-                        'FontSize', 9, ...
-                        'Box', 'on');
+
+                sgtitle(sprintf('%s Protocol: Cell Type Comparison (AGGREGATED) — page %d/%d', ...
+                    protocolType, page, numPages), 'FontSize', 16, 'FontWeight', 'bold');
+            end
+
+            obj.logger.logInfo(sprintf('✓ Aggregated figure(s) created: %d cell types across %d page(s)', ...
+                numCellTypes, numPages));
+        end
+
+        function plotCellTypePanel(obj, ax, cellType, passingTable, filteredData, fittedData, voltages, protocolType, compoundColorMap)
+            %PLOTCELLTYPEPANEL Draw one cell-type panel (IV2 solid, IV3 dashed);
+            %   V_1/2 stats are folded into the legend labels (no external stats box).
+
+            hold(ax, 'on');
+            cellTypeTable = passingTable(strcmp(passingTable.Cell_Type, cellType), :);
+            cellTypeCompounds = unique(cellTypeTable.Compound);
+
+            handles = [];
+            labels = {};
+            ivSpecs = {2, '-', 'o'; 3, '--', 's'};   % IV number, line style, marker
+
+            for c = 1:numel(cellTypeCompounds)
+                compound = cellTypeCompounds{c};
+                compoundColor = compoundColorMap(compound);
+                for s = 1:size(ivSpecs, 1)
+                    ivNum = ivSpecs{s, 1};
+                    d = cellTypeTable(strcmp(cellTypeTable.Compound, compound) & ...
+                        cellTypeTable.IV_Number == ivNum, :);
+                    if height(d) == 0; continue; end
+
+                    [h, ~] = obj.plotCompoundCurve(filteredData, fittedData, d, voltages, ...
+                        protocolType, compound, compoundColor, ivSpecs{s, 2}, ivSpecs{s, 3}, sprintf('IV%d', ivNum));
+
+                    vMid = mean(d.V_mid_mV, 'omitnan');
+                    vSem = std(d.V_mid_mV, 'omitnan') / sqrt(height(d));
+                    handles = [handles; h]; %#ok<AGROW>
+                    labels = [labels; {sprintf('%s IV%d (n=%d, V_{1/2}=%.1f\\pm%.1f)', ...
+                        obj.formatCompoundName(compound), ivNum, height(d), vMid, vSem)}]; %#ok<AGROW>
                 end
             end
-            
-            % External stats panel
-            ax_stats = axes('Position', [0.75, 0.12, 0.23, 0.76], 'Visible', 'off');
-            hold on;
-            
-            % Format stats table
-            statsText = sprintf('\\bf\\fontsize{14}AGGREGATED Statistics\\rm\\fontsize{10}\n\n');
-            
-            currentCellType = '';
-            for s = 1:length(allStatsData)
-                cellType = allStatsData{s}{1};
-                
-                if ~strcmp(cellType, currentCellType)
-                    if ~isempty(currentCellType)
-                        statsText = sprintf('%s\n', statsText);
-                    end
-                    statsText = sprintf('%s\\bf%s\\rm\n', statsText, cellType);
-                    statsText = sprintf('%s%s\n', statsText, repmat('─', 1, length(cellType)));
-                    currentCellType = cellType;
-                end
-                
-                compound = allStatsData{s}{2};
-                n = allStatsData{s}{3};
-                v_mid = allStatsData{s}{4};
-                v_sem = allStatsData{s}{5};
-                iv = allStatsData{s}{6};
-                
-                statsText = sprintf('%s%s (n=%d)\n', statsText, compound, n);
-                statsText = sprintf('%s  %s: V½=%.1f±%.1f\n', statsText, iv, v_mid, v_sem);
+            hold(ax, 'off');
+
+            xlabel(ax, 'Voltage (mV)', 'FontSize', 11, 'FontWeight', 'bold');
+            if strcmp(protocolType, 'activation')
+                ylabel(ax, 'Norm. Conductance (G/G_{max})', 'FontSize', 11, 'FontWeight', 'bold');
+            else
+                ylabel(ax, 'Norm. Inactivation (I/I_{max})', 'FontSize', 11, 'FontWeight', 'bold');
             end
-            
-            % Display stats text
-            text(0.05, 0.98, statsText, ...
-                'Units', 'normalized', ...
-                'VerticalAlignment', 'top', ...
-                'FontName', 'Courier New', ...
-                'FontSize', 9, ...
-                'Interpreter', 'tex', ...
-                'BackgroundColor', [0.98 0.98 0.98], ...
-                'EdgeColor', [0.3 0.3 0.3], ...
-                'LineWidth', 1.5, ...
-                'Margin', 10);
-            
-            % Line style legend
-            yStart = 0.25;
-            
-            xlim(ax_stats, [0, 1]);
-            ylim(ax_stats, [0, 1]);
-            
-            text(ax_stats, 0.05, yStart, '\bf\fontsize{11}Line Styles\rm\fontsize{9}', ...
-                'Units', 'data', 'Interpreter', 'tex');
-            text(ax_stats, 0.05, yStart - 0.03, repmat('─', 1, 11), ...
-                'Units', 'data', 'FontName', 'Courier New', 'FontSize', 9);
-            
-            % IV2 solid
-            plot(ax_stats, [0.08, 0.18], [yStart - 0.06, yStart - 0.06], '-o', ...
-                'Color', [0, 0, 0], 'LineWidth', 2, ...
-                'MarkerSize', 6, 'MarkerFaceColor', [0.7, 0.7, 0.7], ...
-                'MarkerEdgeColor', 'k', ...
-                'Clipping', 'off');
-            text(ax_stats, 0.20, yStart - 0.06, 'IV2 (solid, ○)', ...
-                'Units', 'data', 'FontSize', 9, ...
-                'VerticalAlignment', 'middle');
-            
-            % IV3 dashed
-            plot(ax_stats, [0.08, 0.18], [yStart - 0.10, yStart - 0.10], '--s', ...
-                'Color', [0, 0, 0], 'LineWidth', 2, ...
-                'MarkerSize', 6, 'MarkerFaceColor', [0.7, 0.7, 0.7], ...
-                'MarkerEdgeColor', 'k', ...
-                'Clipping', 'off');
-            text(ax_stats, 0.20, yStart - 0.10, 'IV3 (dashed, □)', ...
-                'Units', 'data', 'FontSize', 9, ...
-                'VerticalAlignment', 'middle');
-            
-            hold off;
-            
-            % Title
-            annotation('textbox', [0.06, 0.92, 0.62, 0.06], ...
-                'String', sprintf('%s Protocol: Cell Type Comparison (AGGREGATED)', protocolType), ...
-                'FontSize', 18, 'FontWeight', 'bold', ...
-                'HorizontalAlignment', 'center', 'EdgeColor', 'none');
-            
-            obj.logger.logInfo(sprintf('✓ Aggregated cell type averages figure created (%d cell types, %d wells)', ...
-                numCellTypes, height(passingTable)));
-                end
+            title(ax, char(cellType), 'FontSize', 14, 'FontWeight', 'bold');
+            grid(ax, 'on'); box(ax, 'on');
+            ylim(ax, [0 1.1]);
+            xlim(ax, [min(voltages) - 5, max(voltages) + 5]);
+            set(ax, 'GridAlpha', 0.2, 'LineWidth', 1.1, 'FontSize', 10);
+
+            if ~isempty(handles)
+                legend(ax, handles, labels, 'Location', 'southeast', 'FontSize', 7, 'Box', 'on');
+            end
+        end
 
     end
     

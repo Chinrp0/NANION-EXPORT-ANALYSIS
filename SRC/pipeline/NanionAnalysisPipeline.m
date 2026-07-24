@@ -278,13 +278,23 @@ classdef NanionAnalysisPipeline < handle
                 protocolType, ...
                 false);
             
-            % Save aggregated Figure 2
+            % Save aggregated Figure 2 page(s)
+            timestamp = datestr(now, 'yyyymmdd_HHMMSS');
+            multiPage = numel(fig2_aggregated) > 1;
+            for p = 1:numel(fig2_aggregated)
+                if ~isgraphics(fig2_aggregated(p))
+                    continue;
+                end
+                if multiPage
+                    figBaseName = sprintf('fig2_cell_type_averages_%s_AGGREGATED_p%d_%s', ...
+                        protocolType, p, timestamp);
+                else
+                    figBaseName = sprintf('fig2_cell_type_averages_%s_AGGREGATED_%s', ...
+                        protocolType, timestamp);
+                end
+                obj.saveFigure(fig2_aggregated(p), protocolOutputDir, figBaseName);
+            end
             if ~isempty(fig2_aggregated)
-                timestamp = datestr(now, 'yyyymmdd_HHMMSS');
-                figBaseName = sprintf('fig2_cell_type_averages_%s_AGGREGATED_%s', ...
-                    protocolType, timestamp);
-                
-                obj.saveFigure(fig2_aggregated, protocolOutputDir, figBaseName);
                 obj.logger.logInfo('✓ Aggregated Figure 2 saved');
             end
             
