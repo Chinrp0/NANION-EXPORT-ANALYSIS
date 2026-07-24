@@ -321,61 +321,70 @@ classdef NanionAnalysisPipeline < handle
             aggregatedFilteredData.wellMetadata.cellConcentration = allCellConc;
             aggregatedFilteredData.numWellsPassed = length(allWellIDs);
             
-            % Combine measurements for each IV
-            ivNames = fieldnames(firstFiltered.measurements);
-            for ivIdx = 1:length(ivNames)
-                ivName = ivNames{ivIdx};
-                
-                % Aggregate each field in measurements
-                firstIV = firstFiltered.measurements.(ivName);
-                ivFields = fieldnames(firstIV);
-                
-                for fIdx = 1:length(ivFields)
+            % Files in a group may have DIFFERENT IV counts (e.g. 2 vs 3 vs 8).
+            % Aggregate only the IVs common to every file so the combined
+            % per-IV data stays aligned with the combined well list.
+            commonIVs = fieldnames(successfulResults{1}.filteredData.measurements);
+            for i = 2:length(successfulResults)
+                commonIVs = intersect(commonIVs, ...
+                    fieldnames(successfulResults{i}.filteredData.measurements), 'stable');
+            end
+            if numel(commonIVs) < numel(fieldnames(firstFiltered.measurements))
+                obj.logger.logWarning(sprintf(...
+                    'Aggregating files with differing IV counts; using %d common IV(s): %s', ...
+                    numel(commonIVs), strjoin(commonIVs, ', ')));
+            end
+
+            % Combine measurements for each common IV
+            aggregatedFilteredData.measurements = struct();
+            for ivIdx = 1:numel(commonIVs)
+                ivName = commonIVs{ivIdx};
+                ivFields = fieldnames(firstFiltered.measurements.(ivName));
+
+                for fIdx = 1:numel(ivFields)
                     fieldName = ivFields{fIdx};
-                    
                     if strcmp(fieldName, 'statistics')
-                        % Skip statistics (will be recalculated if needed)
-                        continue;
+                        continue;  % recalculated downstream if needed
                     end
-                    
-                    % Concatenate data from all files
+
                     combinedData = [];
                     for i = 1:length(successfulResults)
-                        result = successfulResults{i};
-                        ivData = result.filteredData.measurements.(ivName);
-                        
+                        ivData = successfulResults{i}.filteredData.measurements.(ivName);
                         if isfield(ivData, fieldName)
-                            combinedData = [combinedData; ivData.(fieldName)];
+                            combinedData = [combinedData; ivData.(fieldName)]; %#ok<AGROW>
                         end
                     end
-                    
                     aggregatedFilteredData.measurements.(ivName).(fieldName) = combinedData;
                 end
             end
-            
-            % Aggregate fittedData (combine wells) - FIXED VERSION
+
+            % Aggregate fittedData wells. Wells from files with different IV
+            % counts have different fields (iv1..ivN), so reduce every file's
+            % wells to their common fields before concatenating.
+            commonWellFields = fieldnames(successfulResults{1}.fittedData.wells);
+            for i = 2:length(successfulResults)
+                commonWellFields = intersect(commonWellFields, ...
+                    fieldnames(successfulResults{i}.fittedData.wells), 'stable');
+            end
+
             allFittedWells = [];
             for i = 1:length(successfulResults)
                 result = successfulResults{i};
-                if ~isempty(result.fittedData) && isfield(result.fittedData, 'wells')
-                    currentWells = result.fittedData.wells;
-                    
-                    % Ensure column vector orientation (N×1 not 1×N)
-                    if size(currentWells, 2) > 1
-                        currentWells = currentWells';
-                    end
-                    
-                    % Concatenate vertically
-                    if isempty(allFittedWells)
-                        allFittedWells = currentWells;
-                    else
-                        allFittedWells = [allFittedWells; currentWells];
-                    end
+                if isempty(result.fittedData) || ~isfield(result.fittedData, 'wells')
+                    continue;
                 end
+                currentWells = result.fittedData.wells(:);  % force N×1
+                extraFields = setdiff(fieldnames(currentWells), commonWellFields);
+                if ~isempty(extraFields)
+                    currentWells = rmfield(currentWells, extraFields);
+                end
+                currentWells = orderfields(currentWells, commonWellFields);
+                allFittedWells = [allFittedWells; currentWells]; %#ok<AGROW>
             end
-            
+
             aggregatedFittedData = successfulResults{1}.fittedData;
             aggregatedFittedData.wells = allFittedWells;
+            aggregatedFittedData.ivNames = commonIVs;
             
             % Package aggregated data
             aggregatedData = struct(...

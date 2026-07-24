@@ -686,189 +686,154 @@ classdef NanionSummaryFigure < handle
             
             wellID = wellRow.Well_ID{1};
             r2 = wellRow.R_squared(1);
-            
+
             wellIdx = find(strcmp(filteredData.wellIDs, wellID), 1);
-            
+
             if isempty(wellIdx)
                 text(0.5, 0.5, 'Well not found', 'HorizontalAlignment', 'west');
                 legendHandles = [];
                 legendLabels = {};
                 return;
             end
-            
+
             ivNames = fieldnames(filteredData.measurements);
             numIVs = length(ivNames);
-            
-            ivDataArray = {};
-            ivFitArray = {};
-            
+
+            % Build one entry per IV carrying: the normalized data that was fit
+            % and the fitted curve (both stored by the fitter, protocol-agnostic),
+            % plus the protocol-specific raw current for the right axis.
+            hasFit = ~isempty(fittedData) && wellIdx <= numel(fittedData.wells);
+            ivDataArray = cell(1, numIVs);
             for i = 1:numIVs
                 ivName = ivNames{i};
-                ivDataArray{i} = obj.extractWellData(filteredData.measurements.(ivName), wellIdx);
-                ivFit = obj.extractFitParams(fittedData, wellIdx, ivName);
-                
-                if ~isempty(ivFit) && ivFit.converged
-                    ivFitStruct.fitParams = ivFit;
-                    ivFitStruct.fittedCurve = 1 ./ (1 + exp((ivFit.V_mid - voltages) / ivFit.k));
-                    ivFitArray{i} = ivFitStruct;
-                else
-                    ivFitArray{i} = [];
+                entry = struct();
+
+                if hasFit && isfield(fittedData.wells(wellIdx), ivName)
+                    wf = fittedData.wells(wellIdx).(ivName);
+                    if isfield(wf, 'data');        entry.normData = wf.data; end
+                    if isfield(wf, 'fittedCurve') && ~isempty(wf.fittedCurve)
+                        entry.fittedCurve = wf.fittedCurve;
+                    end
+                    if isfield(wf, 'fitParams');   entry.fitParams = wf.fitParams; end
                 end
+
+                m = filteredData.measurements.(ivName);
+                if strcmp(protocolType, 'activation') && isfield(m, 'peakCurrent')
+                    entry.current = m.peakCurrent(wellIdx, :);
+                elseif isfield(m, 'inactivationData')
+                    entry.current = m.inactivationData(wellIdx, :);
+                end
+
+                ivDataArray{i} = entry;
             end
-            
-            [legendHandles, legendLabels] = obj.plotDualAxisFormatMultiIV(wellID, voltages, ivDataArray, ivFitArray, ...
+
+            [legendHandles, legendLabels] = obj.plotDualAxisFormatMultiIV(wellID, voltages, ivDataArray, ...
                 ivNames, category, r2, protocolType, showLegend);
         end
         
-        function [legendHandles, legendLabels] = plotDualAxisFormatMultiIV(obj, wellID, voltages, ivDataArray, ivFitArray, ...
+        function [legendHandles, legendLabels] = plotDualAxisFormatMultiIV(obj, wellID, voltages, ivDataArray, ...
                 ivNames, category, r2, protocolType, showLegend)
-            %PLOTDUALAXISFORMATMULTIIV FIXED: Proper current axis scaling with 25% margin
-            
-            if nargin < 10
+            %PLOTDUALAXISFORMATMULTIIV Left: normalized data + Boltzmann fit.
+            %   Right: protocol-specific raw current. Works for activation AND
+            %   inactivation and for any number of IVs.
+
+            if nargin < 9
                 showLegend = true;
             end
-            
+
             markerSize = 5;
             lineWidth = 1.8;
             fitLineWidth = 2.5;
-            markerAlpha = 0.85;
-            
+
+            % Enough distinct colours for up to 8 IVs
             ivColors = [
-                0.0, 0.0, 0.0;
-                0.0, 0.45, 0.74;
-                0.85, 0.33, 0.10;
-                0.49, 0.18, 0.56;
-            ];
-            
-            ivCurrentColors = [
-                0.5, 0.5, 0.5;
-                0.4, 0.7, 1.0;
-                1.0, 0.6, 0.4;
-                0.7, 0.5, 0.8;
-            ];
-            
-            numIVs = length(ivDataArray);
-            
+                0.00, 0.00, 0.00; 0.00, 0.45, 0.74; 0.85, 0.33, 0.10; 0.49, 0.18, 0.56;
+                0.47, 0.67, 0.19; 0.30, 0.75, 0.93; 0.64, 0.08, 0.18; 0.50, 0.50, 0.50];
+            ivCurrentColors = ivColors * 0.55 + 0.45;   % lighter variants for the current traces
+
+            numIVs = numel(ivDataArray);
             legendHandles = [];
             legendLabels = {};
-            
-            %% FIRST: Find max (most negative) current across ALL IVs for proper scaling
+
+            % Right-axis current limits across all IVs
             allCurrents = [];
             for i = 1:numIVs
-                ivData = ivDataArray{i};
-                if ~isempty(ivData) && isfield(ivData, 'peakCurrent')
-                    allCurrents = [allCurrents, ivData.peakCurrent];
-                end
+                e = ivDataArray{i};
+                if isfield(e, 'current'); allCurrents = [allCurrents, e.current]; end %#ok<AGROW>
             end
-            
-            % Calculate limits: most negative current + 10% margin
-            if ~isempty(allCurrents)
-                mostNegativeCurrent = min(allCurrents);  % Most negative value (e.g., -1500 pA)
-                
-                % Add 10% margin below the most negative current
-                margin = abs(mostNegativeCurrent) * 0.10;
-                currentLimMin = mostNegativeCurrent - margin;
-                currentLimMax = 0;  % Always 0 at top
-                
-                % Optional debug output (uncomment to enable)
-                % fprintf('DEBUG %s: mostNeg=%.1f, margin=%.1f, limMin=%.1f\n', ...
-                %     char(wellID), mostNegativeCurrent, margin, currentLimMin);
+            if ~isempty(allCurrents) && any(~isnan(allCurrents))
+                mn = min(allCurrents, [], 'omitnan');
+                mx = max(allCurrents, [], 'omitnan');
+                pad = 0.10 * max(abs([mn, mx]), [], 'omitnan') + eps;
+                currentLimMin = min(mn - pad, 0);
+                currentLimMax = max(mx + pad, 0);
             else
                 currentLimMin = -1500;
                 currentLimMax = 0;
             end
-            
-            %% LEFT: Conductance
+
+            %% LEFT: normalized data (markers) + fitted curve (line)
             yyaxis left
             hold on;
-            
             for i = 1:numIVs
-                ivData = ivDataArray{i};
-                ivFit = ivFitArray{i};
-                
-                if isempty(ivData) || ~isfield(ivData, 'conductance')
-                    continue;
+                e = ivDataArray{i};
+                col = ivColors(min(i, size(ivColors, 1)), :);
+
+                if isfield(e, 'normData') && any(~isnan(e.normData))
+                    h = plot(voltages, e.normData, 'o', 'Color', col, ...
+                        'MarkerSize', markerSize, 'MarkerFaceColor', col, 'LineWidth', 1);
+                    legendHandles = [legendHandles; h]; %#ok<AGROW>
+                    legendLabels = [legendLabels; {sprintf('%s data', upper(ivNames{i}))}]; %#ok<AGROW>
                 end
-                
-                color_idx = min(i, size(ivColors, 1));
-                condColor = ivColors(color_idx, :);
-                
-                h_cond = plot(voltages, ivData.conductance, '-o', ...
-                    'Color', condColor, 'MarkerSize', markerSize, ...
-                    'MarkerFaceColor', condColor, 'LineWidth', lineWidth, ...
-                    'DisplayName', sprintf('%s Conductance', upper(ivNames{i})));
-                h_cond.Color(4) = markerAlpha;
-                
-                legendHandles = [legendHandles; h_cond];
-                legendLabels = [legendLabels; {sprintf('%s Conductance', upper(ivNames{i}))}];
-                
-                if ~isempty(ivFit) && isfield(ivFit, 'fittedCurve')
-                    fitColor = condColor;
-                    fitColor(4) = 0.7;
-                    h_fit = plot(voltages, ivFit.fittedCurve, ':', ...
-                        'Color', fitColor, 'LineWidth', fitLineWidth, ...
-                        'DisplayName', sprintf('%s Fit (V_{1/2}=%.1f)', ...
-                            upper(ivNames{i}), ivFit.fitParams.V_mid));
-                    
-                    legendHandles = [legendHandles; h_fit];
-                    legendLabels = [legendLabels; {sprintf('%s Fit (V_{1/2}=%.1f)', ...
-                        upper(ivNames{i}), ivFit.fitParams.V_mid)}];
+
+                if isfield(e, 'fittedCurve') && ~isempty(e.fittedCurve)
+                    vmid = NaN;
+                    if isfield(e, 'fitParams') && isfield(e.fitParams, 'V_mid'); vmid = e.fitParams.V_mid; end
+                    h = plot(voltages, e.fittedCurve, '-', 'Color', col, 'LineWidth', fitLineWidth);
+                    legendHandles = [legendHandles; h]; %#ok<AGROW>
+                    legendLabels = [legendLabels; {sprintf('%s fit (V_{1/2}=%.1f)', upper(ivNames{i}), vmid)}]; %#ok<AGROW>
                 end
             end
-            
-            ylabel('Normalized Conductance (G/G_{max})', 'FontSize', 11, 'FontWeight', 'bold');
-            ax = gca;
-            ax.YColor = [0, 0, 0];
-            ylim([0, 1.1]);
-            
-            %% RIGHT: Current (FIXED SCALING with 25% margin)
+            if strcmp(protocolType, 'activation')
+                leftLabel = 'Normalized Conductance (G/G_{max})';
+            else
+                leftLabel = 'Normalized Inactivation (I/I_{max})';
+            end
+            ylabel(leftLabel, 'FontSize', 11, 'FontWeight', 'bold');
+            ax = gca; ax.YColor = [0, 0, 0];
+            ylim([-0.1, 1.2]);
+
+            %% RIGHT: raw current
             yyaxis right
             hold on;
-            
             for i = 1:numIVs
-                ivData = ivDataArray{i};
-                
-                if isempty(ivData) || ~isfield(ivData, 'peakCurrent')
-                    continue;
-                end
-                
-                color_idx = min(i, size(ivCurrentColors, 1));
-                currentColor = ivCurrentColors(color_idx, :);
-                
-                h_current = plot(voltages, ivData.peakCurrent, '-s', ...
-                    'Color', currentColor, 'MarkerSize', markerSize, ...
-                    'MarkerFaceColor', 'none', 'LineWidth', lineWidth, ...
-                    'DisplayName', sprintf('%s Current', upper(ivNames{i})));
-                h_current.Color(4) = markerAlpha;
-                
-                legendHandles = [legendHandles; h_current];
-                legendLabels = [legendLabels; {sprintf('%s Current', upper(ivNames{i}))}];
+                e = ivDataArray{i};
+                if ~isfield(e, 'current'); continue; end
+                col = ivCurrentColors(min(i, size(ivCurrentColors, 1)), :);
+                plot(voltages, e.current, '-s', 'Color', col, 'MarkerSize', markerSize, ...
+                    'MarkerFaceColor', 'none', 'LineWidth', lineWidth);
             end
-            
-            ylabel('Peak Current (pA)', 'FontSize', 11, 'FontWeight', 'bold');
-            ax = gca;
-            ax.YColor = [0, 0, 0];
-            
-            % FIXED: Use calculated limits with proper 25% margin
-            ylim([currentLimMin, currentLimMax]);
-            
+            if strcmp(protocolType, 'activation')
+                rightLabel = 'Peak Current (pA)';
+            else
+                rightLabel = 'Test-pulse Current (pA)';
+            end
+            ylabel(rightLabel, 'FontSize', 11, 'FontWeight', 'bold');
+            ax = gca; ax.YColor = [0, 0, 0];
+            if currentLimMax > currentLimMin
+                ylim([currentLimMin, currentLimMax]);
+            end
+
             %% FORMATTING
             xlabel('Voltage (mV)', 'FontSize', 11, 'FontWeight', 'bold');
             xlim([min(voltages) - 5, max(voltages) + 5]);
-            
             title(sprintf('%s: %s (R²=%.3f)', category, char(wellID), r2), ...
                 'FontSize', 12, 'FontWeight', 'bold');
-            
             grid on;
-            ax = gca;
-            ax.GridAlpha = 0.15;
-            ax.Box = 'on';
-            ax.LineWidth = 1.2;
-            
+            ax = gca; ax.GridAlpha = 0.15; ax.Box = 'on'; ax.LineWidth = 1.2;
             if showLegend
                 legend('Location', 'northwest', 'FontSize', 7, 'Box', 'off');
             end
-            
             hold off;
         end
         
@@ -980,20 +945,15 @@ classdef NanionSummaryFigure < handle
             end
             
             well = fittedData.wells(wellIdx);
-            
-            if strcmp(ivName, 'iv1') && ~isempty(well.iv1)
-                ivFit = well.iv1;
-            elseif strcmp(ivName, 'iv2') && ~isempty(well.iv2)
-                ivFit = well.iv2;
-            elseif strcmp(ivName, 'iv3') && isfield(well, 'iv3') && ~isempty(well.iv3)
-                ivFit = well.iv3;
-            elseif strcmp(ivName, 'iv4') && isfield(well, 'iv4') && ~isempty(well.iv4)
-                ivFit = well.iv4;
+
+            % Dynamic IV lookup — supports any number of IVs (iv1..ivN)
+            if isfield(well, ivName) && ~isempty(well.(ivName)) && isfield(well.(ivName), 'fitParams')
+                ivFit = well.(ivName);
             else
                 fitParams = [];
                 return;
             end
-            
+
             fitParams = ivFit.fitParams;
             fitParams.quality = ivFit.fitQuality;
         end
