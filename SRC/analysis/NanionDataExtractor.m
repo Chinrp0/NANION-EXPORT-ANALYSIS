@@ -587,7 +587,19 @@ classdef NanionDataExtractor < handle
             iv1SeriesR = iv1Data.seriesResistance(wellIdx, :);
             iv1SealR = iv1Data.sealResistance(wellIdx, :);
             iv1Cap = iv1Data.capacitance(wellIdx, :);
-            
+
+            % Signal gate (IV1-referenced): reject leak-only wells that have no
+            % functional current. Without this, a smooth leak ramp still fits a
+            % Boltzmann sigmoid (R2~0.9, V_mid~0) and passes every other filter.
+            if isfield(filters, 'minCurrentDensity') && isfield(iv1Data, 'currentDensity')
+                iv1PeakDensity = max(-iv1Data.currentDensity(wellIdx, :), [], 'omitnan'); % peak inward pA/pF
+                if isnan(iv1PeakDensity) || iv1PeakDensity < filters.minCurrentDensity
+                    passed = false;
+                    ivUsed = 'low_signal';
+                    return;
+                end
+            end
+
             minValidSweeps = 15;
             iv1HasData = (sum(~isnan(iv1SeriesR)) >= minValidSweeps) && ...
                         (sum(~isnan(iv1SealR)) >= minValidSweeps) && ...
