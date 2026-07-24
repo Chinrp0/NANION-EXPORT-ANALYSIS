@@ -215,17 +215,29 @@ classdef NanionDataExtractor < handle
         end
 
         function filteredData = applyQualityFilters(obj, extractedData)
-            %APPLYQUALITYFILTERS Apply MEDIAN-BASED filters with IV2 fallback
-            
-            obj.logger.logInfo('Applying quality filters...');
-            
+            %APPLYQUALITYFILTERS Assess every well, then drop those failing auto-QC.
+            %   Thin wrapper preserving the original behaviour: it composes the
+            %   new assess/apply split using the automatic verdicts. The review
+            %   workflow instead calls assessQuality, lets the user override the
+            %   verdicts, then calls applyDecisions with the final keep mask.
+
+            assessedData = obj.assessQuality(extractedData);
+            filteredData = obj.applyDecisions(assessedData, assessedData.autoKeepMask);
+        end
+
+        function assessedData = assessQuality(obj, extractedData)
+            %ASSESSQUALITY Annotate EVERY well with a QC verdict + reasons; discard nothing.
+            %   Returns extractedData augmented with:
+            %     .verdicts            [numWells x 1] struct (wellID, autoPass, reasons, ivUsed, metrics)
+            %     .autoKeepMask        logical [numWells x 1] (true = auto-pass)
+            %     .ivUsedForFiltering  string  [numWells x 1]
+
+            obj.logger.logInfo('Assessing well quality (annotating all wells, discarding none)...');
+
             measurements = extractedData.measurements;
             filters = obj.config.filters;
             numWells = extractedData.numWells;
-            
-            qualityMask = false(numWells, 1);
-            ivUsedForFiltering = strings(numWells, 1);
-            
+
             iv1Data = measurements.iv1;
             hasIV2 = isfield(measurements, 'iv2');
             if hasIV2
@@ -233,39 +245,85 @@ classdef NanionDataExtractor < handle
             else
                 iv2Data = [];
             end
-            
+
+            autoKeepMask = false(numWells, 1);
+            ivUsedForFiltering = strings(numWells, 1);
+            verdicts = repmat(obj.emptyVerdict(), numWells, 1);
+
             for wellIdx = 1:numWells
-                [passed, ivUsed] = obj.assessWellQuality(iv1Data, iv2Data, wellIdx, filters, hasIV2);
-                qualityMask(wellIdx) = passed;
-                ivUsedForFiltering(wellIdx) = ivUsed;
+                a = obj.assessWellQuality(iv1Data, iv2Data, wellIdx, filters, hasIV2);
+                autoKeepMask(wellIdx) = a.passed;
+                ivUsedForFiltering(wellIdx) = string(a.ivUsed);
+
+                v = obj.emptyVerdict();
+                v.wellID = string(extractedData.wellIDs(wellIdx));
+                v.fileName = string(extractedData.fileName);
+                v.wellKey = v.fileName + "::" + v.wellID;
+                v.autoPass = a.passed;
+                if a.passed
+                    v.autoVerdict = "pass";
+                else
+                    v.autoVerdict = "fail";
+                end
+                v.reasons = a.reasons;
+                v.ivUsed = string(a.ivUsed);
+                v.metrics = a.metrics;
+                verdicts(wellIdx) = v;
             end
-            
-            filterReport = obj.createIVFallbackFilterReport(extractedData.wellIDs, measurements, ...
-                qualityMask, ivUsedForFiltering, filters, hasIV2);
-            
-            filteredMeasurements = obj.applyFilterMask(measurements, qualityMask);
-            
+
+            assessedData = extractedData;
+            assessedData.verdicts = verdicts;
+            assessedData.autoKeepMask = autoKeepMask;
+            assessedData.ivUsedForFiltering = ivUsedForFiltering;
+
+            obj.logger.logInfo(sprintf('✓ Assessed %d wells: %d auto-pass, %d auto-fail', ...
+                numWells, sum(autoKeepMask), sum(~autoKeepMask)));
+        end
+
+        function filteredData = applyDecisions(obj, assessedData, keepMask)
+            %APPLYDECISIONS Drop wells not in keepMask; return filtered data (pipeline shape).
+            %   keepMask defaults to the automatic verdicts when omitted, so the
+            %   result matches the legacy applyQualityFilters output. The full
+            %   verdict list (including rejected wells) is carried through so the
+            %   review app can still show and re-include rejected wells.
+
+            if nargin < 3 || isempty(keepMask)
+                keepMask = assessedData.autoKeepMask;
+            end
+            keepMask = logical(keepMask(:));
+
+            measurements = assessedData.measurements;
+            filters = obj.config.filters;
+            hasIV2 = isfield(measurements, 'iv2');
+
+            filteredMeasurements = obj.applyFilterMask(measurements, keepMask);
+
+            filterReport = obj.createIVFallbackFilterReport(assessedData.wellIDs, measurements, ...
+                keepMask, assessedData.ivUsedForFiltering, filters, hasIV2);
+
             % Add negative conductance filter info to report (if it was applied)
-            if isfield(extractedData, 'negativeConductanceFilter')
-                filterReport.negativeConductanceFiltered = extractedData.negativeConductanceFilter.numFiltered;
+            if isfield(assessedData, 'negativeConductanceFilter')
+                filterReport.negativeConductanceFiltered = assessedData.negativeConductanceFilter.numFiltered;
             else
                 filterReport.negativeConductanceFiltered = 0;
             end
 
             filteredData = struct(...
-                'wellIDs', extractedData.wellIDs(qualityMask), ...
+                'wellIDs', assessedData.wellIDs(keepMask), ...
                 'wellMetadata', struct(...
-                    'cellType', extractedData.wellMetadata.cellType(qualityMask), ...
-                    'cellConcentration', extractedData.wellMetadata.cellConcentration(qualityMask)), ...
+                    'cellType', assessedData.wellMetadata.cellType(keepMask), ...
+                    'cellConcentration', assessedData.wellMetadata.cellConcentration(keepMask)), ...
                 'measurements', filteredMeasurements, ...
-                'protocolInfo', extractedData.protocolInfo, ...
-                'fileName', extractedData.fileName, ...
-                'qualityMask', qualityMask, ...
-                'ivUsedForFiltering', ivUsedForFiltering(qualityMask), ...
+                'protocolInfo', assessedData.protocolInfo, ...
+                'fileName', assessedData.fileName, ...
+                'qualityMask', keepMask, ...
+                'ivUsedForFiltering', assessedData.ivUsedForFiltering(keepMask), ...
                 'filterReport', filterReport, ...
-                'numWellsPassed', sum(qualityMask), ...
-                'numWellsTotal', length(qualityMask));
-            
+                'numWellsPassed', sum(keepMask), ...
+                'numWellsTotal', numel(keepMask), ...
+                'verdicts', {assessedData.verdicts}, ...
+                'keptVerdicts', {assessedData.verdicts(keepMask)});
+
             obj.logIVFallbackFilteringResults(filterReport, hasIV2);
         end
 
@@ -575,100 +633,93 @@ classdef NanionDataExtractor < handle
             end
         end
         
-        function [passed, ivUsed] = assessWellQuality(obj, iv1Data, iv2Data, wellIdx, filters, hasIV2)
-            %ASSESSWELLQUALITY Robust median-based quality check
-            
+        function assessment = assessWellQuality(obj, iv1Data, iv2Data, wellIdx, filters, hasIV2)
+            %ASSESSWELLQUALITY Robust median-based quality check with reasons.
+            %   Returns a struct: passed (logical), ivUsed (char), reasons (cellstr),
+            %   metrics (struct of the key values, for display in the review app).
+            %   Same pass/fail outcome as before; now also reports WHY a well failed.
+
             if isfield(filters, 'outlierThreshold')
                 outlierThreshold = filters.outlierThreshold;
             else
                 outlierThreshold = 2.0;
             end
-            
-            iv1SeriesR = iv1Data.seriesResistance(wellIdx, :);
-            iv1SealR = iv1Data.sealResistance(wellIdx, :);
-            iv1Cap = iv1Data.capacitance(wellIdx, :);
 
-            % Signal gate (IV1-referenced): reject leak-only wells that have no
-            % functional current. Without this, a smooth leak ramp still fits a
-            % Boltzmann sigmoid (R2~0.9, V_mid~0) and passes every other filter.
-            if isfield(filters, 'minCurrentDensity') && isfield(iv1Data, 'currentDensity')
-                iv1PeakDensity = max(-iv1Data.currentDensity(wellIdx, :), [], 'omitnan'); % peak inward pA/pF
-                if isnan(iv1PeakDensity) || iv1PeakDensity < filters.minCurrentDensity
-                    passed = false;
-                    ivUsed = 'low_signal';
+            metrics = struct('iv1PeakDensity', NaN, ...
+                             'seriesRMedian', NaN, 'sealRMedian', NaN, 'capMedian', NaN);
+
+            % Signal gate (IV1-referenced): reject leak-only wells with no functional
+            % current. A smooth leak ramp still fits a sigmoid (R2~0.9, V_mid~0), so
+            % without this it would clear every other filter.
+            if isfield(iv1Data, 'currentDensity')
+                metrics.iv1PeakDensity = max(-iv1Data.currentDensity(wellIdx, :), [], 'omitnan');
+            end
+            if isfield(filters, 'minCurrentDensity') && ...
+               (isnan(metrics.iv1PeakDensity) || metrics.iv1PeakDensity < filters.minCurrentDensity)
+                assessment = struct('passed', false, 'ivUsed', 'low_signal', ...
+                    'reasons', {{'low_signal'}}, 'metrics', metrics);
+                return;
+            end
+
+            % Rs / seal / cap quality on IV1 (with IV2 fallback)
+            [iv1ok, iv1reasons, iv1metrics] = obj.checkQualityBlock(iv1Data, wellIdx, filters, outlierThreshold);
+            metrics.seriesRMedian = iv1metrics.seriesRMedian;
+            metrics.sealRMedian = iv1metrics.sealRMedian;
+            metrics.capMedian = iv1metrics.capMedian;
+            if iv1ok
+                assessment = struct('passed', true, 'ivUsed', 'iv1', 'reasons', {{}}, 'metrics', metrics);
+                return;
+            end
+
+            if hasIV2 && ~isempty(iv2Data)
+                iv2ok = obj.checkQualityBlock(iv2Data, wellIdx, filters, outlierThreshold);
+                if iv2ok
+                    assessment = struct('passed', true, 'ivUsed', 'iv2', 'reasons', {{}}, 'metrics', metrics);
                     return;
                 end
             end
 
+            assessment = struct('passed', false, 'ivUsed', 'insufficient_data', ...
+                'reasons', {iv1reasons}, 'metrics', metrics);
+        end
+
+        function [ok, reasons, metrics] = checkQualityBlock(obj, ivData, wellIdx, filters, outlierThreshold) %#ok<INUSL>
+            %CHECKQUALITYBLOCK Median + outlier Rs/seal/cap check for one IV of one well.
+            %   Returns ok (logical), reasons (cellstr of specific failures), metrics.
+
+            seriesR = ivData.seriesResistance(wellIdx, :);
+            sealR = ivData.sealResistance(wellIdx, :);
+            cap = ivData.capacitance(wellIdx, :);
             minValidSweeps = 15;
-            iv1HasData = (sum(~isnan(iv1SeriesR)) >= minValidSweeps) && ...
-                        (sum(~isnan(iv1SealR)) >= minValidSweeps) && ...
-                        (sum(~isnan(iv1Cap)) >= minValidSweeps);
-            
-            if iv1HasData
-                iv1SeriesRMedian = median(iv1SeriesR, 'omitnan');
-                iv1SealRMedian = median(iv1SealR, 'omitnan');
-                iv1CapMedian = median(iv1Cap, 'omitnan');
-                
-                medianPasses = (iv1SeriesRMedian <= filters.maxSeriesResistance) && ...
-                              (iv1SealRMedian <= filters.maxSealResistance) && ...
-                              (iv1CapMedian <= filters.maxCapacitance);
-                
-                if medianPasses
-                    iv1SeriesRMax = max(iv1SeriesR, [], 'omitnan');
-                    iv1SealRMax = max(iv1SealR, [], 'omitnan');
-                    iv1CapMax = max(iv1Cap, [], 'omitnan');
-                    
-                    outlierCheck = (iv1SeriesRMax <= iv1SeriesRMedian * outlierThreshold) && ...
-                                  (iv1SealRMax <= iv1SealRMedian * outlierThreshold) && ...
-                                  (iv1CapMax <= iv1CapMedian * outlierThreshold);
-                    
-                    if outlierCheck
-                        passed = true;
-                        ivUsed = 'iv1';
-                        return;
-                    end
-                end
+
+            metrics = struct('seriesRMedian', median(seriesR, 'omitnan'), ...
+                             'sealRMedian', median(sealR, 'omitnan'), ...
+                             'capMedian', median(cap, 'omitnan'));
+            reasons = {};
+
+            hasData = (sum(~isnan(seriesR)) >= minValidSweeps) && ...
+                      (sum(~isnan(sealR)) >= minValidSweeps) && ...
+                      (sum(~isnan(cap)) >= minValidSweeps);
+            if ~hasData
+                ok = false; reasons = {'insufficient_valid_sweeps'}; return;
             end
-            
-            if hasIV2 && ~isempty(iv2Data)
-                iv2SeriesR = iv2Data.seriesResistance(wellIdx, :);
-                iv2SealR = iv2Data.sealResistance(wellIdx, :);
-                iv2Cap = iv2Data.capacitance(wellIdx, :);
-                
-                iv2HasData = (sum(~isnan(iv2SeriesR)) >= minValidSweeps) && ...
-                            (sum(~isnan(iv2SealR)) >= minValidSweeps) && ...
-                            (sum(~isnan(iv2Cap)) >= minValidSweeps);
-                
-                if iv2HasData
-                    iv2SeriesRMedian = median(iv2SeriesR, 'omitnan');
-                    iv2SealRMedian = median(iv2SealR, 'omitnan');
-                    iv2CapMedian = median(iv2Cap, 'omitnan');
-                    
-                    medianPasses = (iv2SeriesRMedian <= filters.maxSeriesResistance) && ...
-                                  (iv2SealRMedian <= filters.maxSealResistance) && ...
-                                  (iv2CapMedian <= filters.maxCapacitance);
-                    
-                    if medianPasses
-                        iv2SeriesRMax = max(iv2SeriesR, [], 'omitnan');
-                        iv2SealRMax = max(iv2SealR, [], 'omitnan');
-                        iv2CapMax = max(iv2Cap, [], 'omitnan');
-                        
-                        outlierCheck = (iv2SeriesRMax <= iv2SeriesRMedian * outlierThreshold) && ...
-                                      (iv2SealRMax <= iv2SealRMedian * outlierThreshold) && ...
-                                      (iv2CapMax <= iv2CapMedian * outlierThreshold);
-                        
-                        if outlierCheck
-                            passed = true;
-                            ivUsed = 'iv2';
-                            return;
-                        end
-                    end
-                end
-            end
-            
-            passed = false;
-            ivUsed = 'insufficient_data';
+
+            if metrics.seriesRMedian > filters.maxSeriesResistance; reasons{end+1} = 'high_series_resistance'; end
+            if metrics.sealRMedian > filters.maxSealResistance;   reasons{end+1} = 'high_seal_resistance'; end
+            if metrics.capMedian > filters.maxCapacitance;        reasons{end+1} = 'high_capacitance'; end
+            if ~isempty(reasons); ok = false; return; end
+
+            if max(seriesR, [], 'omitnan') > metrics.seriesRMedian * outlierThreshold; reasons{end+1} = 'unstable_series_resistance'; end
+            if max(sealR, [], 'omitnan')   > metrics.sealRMedian * outlierThreshold;   reasons{end+1} = 'unstable_seal_resistance'; end
+            if max(cap, [], 'omitnan')     > metrics.capMedian * outlierThreshold;     reasons{end+1} = 'unstable_capacitance'; end
+            ok = isempty(reasons);
+        end
+
+        function v = emptyVerdict(~)
+            %EMPTYVERDICT Template for a per-well QC verdict record.
+            v = struct('wellID', "", 'fileName', "", 'wellKey', "", ...
+                'autoPass', false, 'autoVerdict', "fail", 'reasons', {{}}, ...
+                'ivUsed', "", 'metrics', struct());
         end
         
         function filterReport = createIVFallbackFilterReport(obj, wellIDs, measurements, ...
