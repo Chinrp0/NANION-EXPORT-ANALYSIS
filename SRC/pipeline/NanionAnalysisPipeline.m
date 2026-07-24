@@ -555,8 +555,8 @@ classdef NanionAnalysisPipeline < handle
             end
         end
         
-        function saveFigure(obj, figHandle, outputPath, baseName)
-            %SAVEFIGURE Save figure in multiple formats
+       function saveFigure(obj, figHandle, outputPath, baseName)
+            %SAVEFIGURE Save figure as PNG only
             
             if isempty(figHandle)
                 return;
@@ -569,18 +569,6 @@ classdef NanionAnalysisPipeline < handle
             pngFile = fullfile(outputPath, [baseName, '.png']);
             saveas(figHandle, pngFile);
             obj.logger.logInfo(sprintf('✓ Saved PNG: %s', baseName));
-            
-            figFile = fullfile(outputPath, [baseName, '.fig']);
-            savefig(figHandle, figFile);
-            obj.logger.logInfo(sprintf('✓ Saved FIG: %s', baseName));
-            
-            try
-                pdfFile = fullfile(outputPath, [baseName, '.pdf']);
-                exportgraphics(figHandle, pdfFile, 'ContentType', 'vector');
-                obj.logger.logInfo(sprintf('✓ Saved PDF: %s', baseName));
-            catch
-                obj.logger.logDebug('PDF export not available');
-            end
         end
         
         function openOutputFolder(obj, folderPath)

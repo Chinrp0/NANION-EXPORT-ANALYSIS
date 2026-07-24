@@ -68,27 +68,36 @@ classdef NanionDataExtractor < handle
 
         function extractedData = calculateCurrentDensity(obj, extractedData)
             %CALCULATECURRENTDENSITY Calculate sweep-by-sweep current density
-            %   Density = I_peak (pA) / Capacitance (pF) for each sweep at each voltage
+            %   Activation: Density = peakCurrent / Capacitance
+            %   Inactivation: Density = inactivationData / Capacitance
             
             obj.logger.logInfo('Calculating current density (I/C)...');
             
+            protocolType = extractedData.protocolInfo.type;
             measurements = extractedData.measurements;
             ivFields = fieldnames(measurements);
             
             for i = 1:length(ivFields)
                 ivName = ivFields{i};
+                ivData = measurements.(ivName);
+                capacitance = ivData.capacitance;  % pF
                 
-                % Get peak current [numWells × 23] and capacitance [numWells × 23]
-                peakCurrent = measurements.(ivName).peakCurrent;  % pA
-                capacitance = measurements.(ivName).capacitance;  % pF
+                % Select appropriate current data based on protocol
+                if strcmp(protocolType, 'activation')
+                    currentData = ivData.peakCurrent;  % pA
+                elseif strcmp(protocolType, 'inactivation')
+                    currentData = ivData.inactivationData;  % pA
+                else
+                    error('Unknown protocol type: %s', protocolType);
+                end
                 
                 % Calculate density: I / C (element-wise division)
-                currentDensity = peakCurrent ./ capacitance;  % [numWells × 23] in pA/pF
+                currentDensity = currentData ./ capacitance;  % [numWells × 23] in pA/pF
                 
-                % Handle division by zero/NaN (if capacitance is zero or NaN)
+                % Handle division by zero/NaN
                 currentDensity(isinf(currentDensity) | isnan(capacitance) | capacitance <= 0) = NaN;
                 
-                % Store current density alongside current
+                % Store current density
                 measurements.(ivName).currentDensity = currentDensity;  % pA/pF
                 
                 obj.logger.logDebug(sprintf('%s: Calculated current density (I/C)', ivName));
@@ -281,11 +290,18 @@ classdef NanionDataExtractor < handle
                 stats.sealR = obj.computeStats(ivData.sealResistance);
                 stats.capacitance = obj.computeStats(ivData.capacitance);
                 
-                % Current metrics (across 23 voltages)
-                stats.peakCurrent = obj.computeStats(ivData.peakCurrent);
+                % Current metrics - protocol-specific
+                if strcmp(protocolType, 'activation')
+                    stats.peakCurrent = obj.computeStats(ivData.peakCurrent);
+                elseif strcmp(protocolType, 'inactivation')
+                    stats.inactivationData = obj.computeStats(ivData.inactivationData);
+                    stats.activationData = obj.computeStats(ivData.activationData);
+                end
+                
+                % Current density (for all protocols)
                 stats.currentDensity = obj.computeStats(ivData.currentDensity);
                 
-                % Raw conductance (activation only) - BEFORE normalization
+                % Raw conductance (activation only)
                 if strcmp(protocolType, 'activation') && isfield(ivData, 'conductance_raw')
                     stats.conductance_raw = obj.computeStats(ivData.conductance_raw);
                 end

@@ -398,6 +398,255 @@ classdef NanionSummaryFigure < handle
             
             obj.logger.logInfo(sprintf('✓ Cell type averages figure created (%d cell types)', numCellTypes));
         end
+
+        function figHandle = createAggregatedCellTypeAveragesFigure(obj, filteredData, fittedData, summaryTable, protocolType, includePoorFits)
+            %CREATEAGGREGATEDCELLTYPEAVERAGESFIGURE Generate Figure 2 from multiple files
+            %   Identical to createCellTypeAveragesFigure but for aggregated batch data
+            
+            if nargin < 6
+                includePoorFits = false;
+            end
+            
+            obj.logger.logInfo('Creating AGGREGATED cell type averages figure...');
+            
+            voltages = filteredData.protocolInfo.voltages;
+            
+            % Filter by quality
+            if includePoorFits == 2
+                passingMask = true(height(summaryTable), 1);
+            elseif includePoorFits == 1 || includePoorFits == true
+                passingMask = strcmp(summaryTable.Fit_Quality, 'Good') | ...
+                              strcmp(summaryTable.Fit_Quality, 'Acceptable') | ...
+                              strcmp(summaryTable.Fit_Quality, 'Poor');
+            else
+                passingMask = strcmp(summaryTable.Fit_Quality, 'Good') | ...
+                              strcmp(summaryTable.Fit_Quality, 'Acceptable');
+            end
+            
+            passingTable = summaryTable(passingMask, :);
+            
+            if height(passingTable) == 0
+                obj.logger.logWarning('No passing fits for aggregated figure');
+                figHandle = [];
+                return;
+            end
+            
+            uniqueCellTypes = unique(passingTable.Cell_Type);
+            numCellTypes = length(uniqueCellTypes);
+            
+            obj.logger.logInfo(sprintf('Aggregated figure: %d cell types, %d total rows', ...
+                numCellTypes, height(passingTable)));
+            
+            figHandle = figure('Position', [50, 50, 1800, 700], ...
+                'Color', 'w', 'Name', sprintf('Cell Type Averages - AGGREGATED (%s)', protocolType), ...
+                'Visible', 'off');
+            
+            allCompounds = unique(passingTable.Compound);
+            compoundColorMap = obj.assignCompoundColors(allCompounds);
+            
+            allHandles = [];
+            allLabels = {};
+            compoundsSeen = containers.Map('KeyType', 'char', 'ValueType', 'logical');
+            allStatsData = {};
+            
+            % Tight layout
+            leftMargin = 0.06;
+            rightMargin = 0.28;
+            bottomMargin = 0.12;
+            topMargin = 0.12;
+            hspace = 0.04;
+            
+            for ct = 1:numCellTypes
+                plotWidth = (1 - leftMargin - rightMargin - (numCellTypes-1)*hspace) / numCellTypes;
+                plotHeight = 1 - topMargin - bottomMargin;
+                
+                xPos = leftMargin + (ct-1) * (plotWidth + hspace);
+                yPos = bottomMargin;
+                
+                ax = axes('Position', [xPos, yPos, plotWidth, plotHeight]);
+                
+                cellType = uniqueCellTypes{ct};
+                cellTypeMask = strcmp(passingTable.Cell_Type, cellType);
+                cellTypeTable = passingTable(cellTypeMask, :);
+                
+                cellTypeCompounds = unique(cellTypeTable.Compound);
+                
+                % Track handles/labels for THIS subplot's legend
+                subplotHandles = [];
+                subplotLabels = {};
+                
+                hold on;
+                
+                for c = 1:length(cellTypeCompounds)
+                    compound = cellTypeCompounds{c};
+                    
+                    compoundMask = strcmp(cellTypeTable.Compound, compound);
+                    iv2Mask = compoundMask & (cellTypeTable.IV_Number == 2);
+                    iv3Mask = compoundMask & (cellTypeTable.IV_Number == 3);
+                    
+                    iv2Data = cellTypeTable(iv2Mask, :);
+                    iv3Data = cellTypeTable(iv3Mask, :);
+                    
+                    compoundColor = compoundColorMap(compound);
+                    
+                    % Plot IV2
+                    if height(iv2Data) > 0
+                        [h2, ~] = obj.plotCompoundCurve(filteredData, fittedData, iv2Data, ...
+                            voltages, protocolType, compound, compoundColor, '-', 'o', 'IV2');
+                        
+                        % Add to subplot-specific legend
+                        subplotHandles = [subplotHandles; h2];
+                        subplotLabels = [subplotLabels; {sprintf('%s (IV2, n=%d)', ...
+                            obj.formatCompoundName(compound), height(iv2Data))}];
+                        
+                        % Track globally for first occurrence
+                        compoundKey = char(compound);
+                        if ~isKey(compoundsSeen, compoundKey)
+                            allHandles = [allHandles; h2];
+                            allLabels = [allLabels; {obj.formatCompoundName(compound)}];
+                            compoundsSeen(compoundKey) = true;
+                        end
+                        
+                        V_mid_mean = mean(iv2Data.V_mid_mV, 'omitnan');
+                        V_mid_SEM = std(iv2Data.V_mid_mV, 'omitnan') / sqrt(height(iv2Data));
+                        allStatsData{end+1} = {char(cellType), obj.formatCompoundName(compound), ...
+                            height(iv2Data), V_mid_mean, V_mid_SEM, 'IV2'};
+                    end
+                    
+                    % Plot IV3
+                    if height(iv3Data) > 0
+                        [h3, ~] = obj.plotCompoundCurve(filteredData, fittedData, iv3Data, ...
+                            voltages, protocolType, compound, compoundColor, '--', 's', 'IV3');
+                        
+                        % Add to subplot-specific legend
+                        subplotHandles = [subplotHandles; h3];
+                        subplotLabels = [subplotLabels; {sprintf('%s (IV3, n=%d)', ...
+                            obj.formatCompoundName(compound), height(iv3Data))}];
+                        
+                        V_mid_mean = mean(iv3Data.V_mid_mV, 'omitnan');
+                        V_mid_SEM = std(iv3Data.V_mid_mV, 'omitnan') / sqrt(height(iv3Data));
+                        allStatsData{end+1} = {char(cellType), obj.formatCompoundName(compound), ...
+                            height(iv3Data), V_mid_mean, V_mid_SEM, 'IV3'};
+                    end
+                end
+                
+                hold off;
+                
+                % Formatting
+                xlabel('Voltage (mV)', 'FontSize', 13, 'FontWeight', 'bold');
+                if ct == 1
+                    if strcmp(protocolType, 'activation')
+                        ylabel('Norm. Conductance (G/G_{max})', 'FontSize', 13, 'FontWeight', 'bold');
+                    else
+                        ylabel('Norm. Inactivation', 'FontSize', 13, 'FontWeight', 'bold');
+                    end
+                end
+                
+                title(sprintf('%s', char(cellType)), 'FontSize', 16, 'FontWeight', 'bold');
+                
+                grid on;
+                box on;
+                ylim([0 1.1]);
+                xlim([min(voltages) - 5, max(voltages) + 5]);
+                
+                ax.GridAlpha = 0.2;
+                ax.LineWidth = 1.2;
+                ax.FontSize = 12;
+                
+                % Add legend to each subplot
+                if ~isempty(subplotHandles)
+                    leg = legend(subplotHandles, subplotLabels, ...
+                        'Location', 'southeast', ...
+                        'FontSize', 9, ...
+                        'Box', 'on');
+                end
+            end
+            
+            % External stats panel
+            ax_stats = axes('Position', [0.75, 0.12, 0.23, 0.76], 'Visible', 'off');
+            hold on;
+            
+            % Format stats table
+            statsText = sprintf('\\bf\\fontsize{14}AGGREGATED Statistics\\rm\\fontsize{10}\n\n');
+            
+            currentCellType = '';
+            for s = 1:length(allStatsData)
+                cellType = allStatsData{s}{1};
+                
+                if ~strcmp(cellType, currentCellType)
+                    if ~isempty(currentCellType)
+                        statsText = sprintf('%s\n', statsText);
+                    end
+                    statsText = sprintf('%s\\bf%s\\rm\n', statsText, cellType);
+                    statsText = sprintf('%s%s\n', statsText, repmat('─', 1, length(cellType)));
+                    currentCellType = cellType;
+                end
+                
+                compound = allStatsData{s}{2};
+                n = allStatsData{s}{3};
+                v_mid = allStatsData{s}{4};
+                v_sem = allStatsData{s}{5};
+                iv = allStatsData{s}{6};
+                
+                statsText = sprintf('%s%s (n=%d)\n', statsText, compound, n);
+                statsText = sprintf('%s  %s: V½=%.1f±%.1f\n', statsText, iv, v_mid, v_sem);
+            end
+            
+            % Display stats text
+            text(0.05, 0.98, statsText, ...
+                'Units', 'normalized', ...
+                'VerticalAlignment', 'top', ...
+                'FontName', 'Courier New', ...
+                'FontSize', 9, ...
+                'Interpreter', 'tex', ...
+                'BackgroundColor', [0.98 0.98 0.98], ...
+                'EdgeColor', [0.3 0.3 0.3], ...
+                'LineWidth', 1.5, ...
+                'Margin', 10);
+            
+            % Line style legend
+            yStart = 0.25;
+            
+            xlim(ax_stats, [0, 1]);
+            ylim(ax_stats, [0, 1]);
+            
+            text(ax_stats, 0.05, yStart, '\bf\fontsize{11}Line Styles\rm\fontsize{9}', ...
+                'Units', 'data', 'Interpreter', 'tex');
+            text(ax_stats, 0.05, yStart - 0.03, repmat('─', 1, 11), ...
+                'Units', 'data', 'FontName', 'Courier New', 'FontSize', 9);
+            
+            % IV2 solid
+            plot(ax_stats, [0.08, 0.18], [yStart - 0.06, yStart - 0.06], '-o', ...
+                'Color', [0, 0, 0], 'LineWidth', 2, ...
+                'MarkerSize', 6, 'MarkerFaceColor', [0.7, 0.7, 0.7], ...
+                'MarkerEdgeColor', 'k', ...
+                'Clipping', 'off');
+            text(ax_stats, 0.20, yStart - 0.06, 'IV2 (solid, ○)', ...
+                'Units', 'data', 'FontSize', 9, ...
+                'VerticalAlignment', 'middle');
+            
+            % IV3 dashed
+            plot(ax_stats, [0.08, 0.18], [yStart - 0.10, yStart - 0.10], '--s', ...
+                'Color', [0, 0, 0], 'LineWidth', 2, ...
+                'MarkerSize', 6, 'MarkerFaceColor', [0.7, 0.7, 0.7], ...
+                'MarkerEdgeColor', 'k', ...
+                'Clipping', 'off');
+            text(ax_stats, 0.20, yStart - 0.10, 'IV3 (dashed, □)', ...
+                'Units', 'data', 'FontSize', 9, ...
+                'VerticalAlignment', 'middle');
+            
+            hold off;
+            
+            % Title
+            annotation('textbox', [0.06, 0.92, 0.62, 0.06], ...
+                'String', sprintf('%s Protocol: Cell Type Comparison (AGGREGATED)', protocolType), ...
+                'FontSize', 18, 'FontWeight', 'bold', ...
+                'HorizontalAlignment', 'center', 'EdgeColor', 'none');
+            
+            obj.logger.logInfo(sprintf('✓ Aggregated cell type averages figure created (%d cell types, %d wells)', ...
+                numCellTypes, height(passingTable)));
+                end
+
     end
     
     methods (Access = private)

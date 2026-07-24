@@ -49,8 +49,8 @@ classdef NanionXLSXExporter < handle
                 obj.createPerIVSheets(excelFile, summaryTable);
                 
                 % Sheets N+1: Grouped sheets (by Cell_Type + Compound + Concentration)
-                obj.logger.logInfo('Creating grouped sheets...');
-                obj.createGroupedSheets(excelFile, summaryTable);
+                %obj.logger.logInfo('Creating grouped sheets...');
+                %obj.createGroupedSheets(excelFile, summaryTable);
                 
                 % Final Sheet: Fit Quality Report
                 obj.logger.logInfo('Creating Fit Quality Report sheet...');
@@ -93,7 +93,7 @@ classdef NanionXLSXExporter < handle
             obj.formatSheet(aggFile, 'All_Data', aggregatedTable);
             
             obj.createPerIVSheets(aggFile, aggregatedTable);
-            obj.createGroupedSheets(aggFile, aggregatedTable);
+            %obj.createGroupedSheets(aggFile, aggregatedTable);
             obj.createAggregatedFitQualitySheet(aggFile, aggregatedTable, fileNames);
             
             obj.logger.logInfo('✓ All workbooks exported successfully');
