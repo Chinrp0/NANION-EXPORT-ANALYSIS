@@ -477,27 +477,35 @@ classdef NanionSummaryFigure < handle
             cellTypeTable = passingTable(strcmp(passingTable.Cell_Type, cellType), :);
             cellTypeCompounds = unique(cellTypeTable.Compound);
 
+            % Plot every IV present: IV1 is the reference/baseline, IV2..IVN the
+            % applied-compound conditions. Line style encodes the IV, colour the
+            % compound.
+            ivNums = unique(cellTypeTable.IV_Number(:))';
+            lineStyles = {'-', '--', ':', '-.'};
+            markers = {'o', 's', '^', 'd', 'v', '>', '<', 'p'};
+
             handles = [];
             labels = {};
-            ivSpecs = {2, '-', 'o'; 3, '--', 's'};   % IV number, line style, marker
 
             for c = 1:numel(cellTypeCompounds)
                 compound = cellTypeCompounds{c};
                 compoundColor = compoundColorMap(compound);
-                for s = 1:size(ivSpecs, 1)
-                    ivNum = ivSpecs{s, 1};
+                for ivNum = ivNums
                     d = cellTypeTable(strcmp(cellTypeTable.Compound, compound) & ...
                         cellTypeTable.IV_Number == ivNum, :);
                     if height(d) == 0; continue; end
 
+                    ls = lineStyles{mod(ivNum - 1, numel(lineStyles)) + 1};
+                    mk = markers{mod(ivNum - 1, numel(markers)) + 1};
                     [h, ~] = obj.plotCompoundCurve(filteredData, fittedData, d, voltages, ...
-                        protocolType, compound, compoundColor, ivSpecs{s, 2}, ivSpecs{s, 3}, sprintf('IV%d', ivNum));
+                        protocolType, compound, compoundColor, ls, mk, sprintf('IV%d', ivNum));
 
                     vMid = mean(d.V_mid_mV, 'omitnan');
                     vSem = std(d.V_mid_mV, 'omitnan') / sqrt(height(d));
+                    if ivNum == 1; refTag = ' ref'; else; refTag = ''; end
                     handles = [handles; h]; %#ok<AGROW>
-                    labels = [labels; {sprintf('%s IV%d (n=%d, V_{1/2}=%.1f\\pm%.1f)', ...
-                        obj.formatCompoundName(compound), ivNum, height(d), vMid, vSem)}]; %#ok<AGROW>
+                    labels = [labels; {sprintf('%s IV%d%s (n=%d, V_{1/2}=%.1f\\pm%.1f)', ...
+                        obj.formatCompoundName(compound), ivNum, refTag, height(d), vMid, vSem)}]; %#ok<AGROW>
                 end
             end
             hold(ax, 'off');
