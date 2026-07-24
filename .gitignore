@@ -1,0 +1,15 @@
+# MATLAB autosave / temp / workspace files
+*.asv
+*.m~
+*.autosave
+matlab.mat
+
+# Generated analysis outputs (never commit run artifacts)
+SRC/output/
+/output/
+**/test_output/
+**/tests/output/
+
+# Common cruft
+.DS_Store
+Thumbs.db
