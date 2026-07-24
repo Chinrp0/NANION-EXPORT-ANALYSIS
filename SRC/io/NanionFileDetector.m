@@ -64,53 +64,148 @@ classdef NanionFileDetector < handle
     methods (Access = private)
         function protocolType = detectProtocolType(obj, headerData)
             %DETECTPROTOCOLTYPE Detect activation vs inactivation protocol
-            
+            %   Fallback chain (most robust first):
+            %     1. 'Protocol Name' cell (row 1): NaIV -> activation, SSI -> inactivation
+            %     2. Columns-per-sweep: 6 -> activation, 7 -> inactivation
+            %     3. Legacy header keyword scan (Peak / Inact+Act)
+            %   Protocol-name values are inconsistent across exports (seen
+            %   'NaIV_LIBD', blank, 'SSI'), so the column pattern is the trusted
+            %   fallback whenever the name is missing or unrecognized.
+
             protocolType = '';
-            
+
+            % --- 1. Protocol name string ---
+            protocolName = obj.getProtocolName(headerData);
+            if ~isempty(protocolName)
+                if contains(protocolName, 'NaIV', 'IgnoreCase', true)
+                    protocolType = 'activation';
+                    obj.logger.logInfo(sprintf('Protocol name "%s" -> activation', protocolName));
+                    return;
+                elseif contains(protocolName, 'SSI', 'IgnoreCase', true)
+                    protocolType = 'inactivation';
+                    obj.logger.logInfo(sprintf('Protocol name "%s" -> inactivation', protocolName));
+                    return;
+                else
+                    obj.logger.logWarning(sprintf(...
+                        'Unrecognized protocol name "%s"; falling back to column pattern', protocolName));
+                end
+            else
+                obj.logger.logInfo('Protocol name cell empty; using column-pattern detection');
+            end
+
+            % --- 2. Columns per sweep (content-based, survives renamed files) ---
+            colsPerSweep = obj.countColumnsPerSweep(headerData);
+            switch colsPerSweep
+                case 6
+                    protocolType = 'activation';
+                    obj.logger.logInfo('Column pattern (6 cols/sweep) -> activation');
+                    return;
+                case 7
+                    protocolType = 'inactivation';
+                    obj.logger.logInfo('Column pattern (7 cols/sweep) -> inactivation');
+                    return;
+                otherwise
+                    if colsPerSweep > 0
+                        obj.logger.logWarning(sprintf(...
+                            'Ambiguous column pattern (%d cols/sweep); trying keyword scan', colsPerSweep));
+                    end
+            end
+
+            % --- 3. Legacy keyword scan (last resort) ---
+            protocolType = obj.detectProtocolTypeByKeywords(headerData);
+            if ~isempty(protocolType)
+                obj.logger.logWarning(sprintf('Detected %s via legacy keyword scan', protocolType));
+            end
+        end
+
+        function protocolName = getProtocolName(obj, headerData)
+            %GETPROTOCOLNAME Value of the cell to the right of the 'Protocol Name' label
+            protocolName = '';
+            maxRow = min(3, size(headerData, 1));
+            for row = 1:maxRow
+                for col = 1:size(headerData, 2)
+                    label = obj.cellToStr(headerData{row, col});
+                    if contains(label, 'Protocol Name', 'IgnoreCase', true)
+                        for c2 = col+1:size(headerData, 2)
+                            val = strtrim(obj.cellToStr(headerData{row, c2}));
+                            if ~isempty(val)
+                                protocolName = val;
+                                return;
+                            end
+                        end
+                    end
+                end
+            end
+        end
+
+        function colsPerSweep = countColumnsPerSweep(obj, headerData)
+            %COUNTCOLUMNSPERSWEEP Stride between the first 'Sweep 001' and 'Sweep 002'
+            %   columns in the sweep header row. 6 = activation, 7 = inactivation.
+            colsPerSweep = 0;
+            for row = 1:size(headerData, 1)
+                firstCol001 = 0;
+                firstCol002 = 0;
+                for col = 1:size(headerData, 2)
+                    s = obj.cellToStr(headerData{row, col});
+                    if firstCol001 == 0 && contains(s, 'Sweep 001', 'IgnoreCase', true)
+                        firstCol001 = col;
+                    elseif firstCol002 == 0 && contains(s, 'Sweep 002', 'IgnoreCase', true)
+                        firstCol002 = col;
+                    end
+                end
+                if firstCol001 > 0 && firstCol002 > firstCol001
+                    colsPerSweep = firstCol002 - firstCol001;
+                    return;
+                end
+            end
+        end
+
+        function protocolType = detectProtocolTypeByKeywords(obj, headerData)
+            %DETECTPROTOCOLTYPEBYKEYWORDS Legacy scan for Peak / Inact+Act markers
+
+            protocolType = '';
+
             for row = 1:size(headerData, 1)
                 rowCells = headerData(row, :);
                 searchStr = '';
-                
+
                 for col = 1:length(rowCells)
-                    cell_val = rowCells{col};
-                    
-                    try
-                        if isempty(cell_val)
-                            continue;
-                        end
-                        
-                        if isnumeric(cell_val) && any(isnan(cell_val(:)))
-                            continue;
-                        end
-                        
-                        if ischar(cell_val)
-                            searchStr = [searchStr, ' ', cell_val];
-                        elseif isstring(cell_val) && ~ismissing(cell_val)
-                            searchStr = [searchStr, ' ', char(cell_val)];
-                        elseif isnumeric(cell_val) && ~any(isnan(cell_val(:)))
-                            searchStr = [searchStr, ' ', num2str(cell_val(1))];
-                        end
-                    catch
-                        continue;
-                    end
+                    searchStr = [searchStr, ' ', obj.cellToStr(rowCells{col})]; %#ok<AGROW>
                 end
-                
+
                 % Check for activation protocol
                 if contains(searchStr, 'Peak', 'IgnoreCase', true)
                     protocolType = 'activation';
                     obj.logger.logInfo(sprintf('Found activation keywords in row %d', row));
                     break;
                 end
-                
+
                 % Check for inactivation protocol
                 hasInact = contains(searchStr, 'Inact', 'IgnoreCase', true);
                 hasAct = contains(searchStr, 'Act', 'IgnoreCase', true);
-                
+
                 if hasInact && hasAct
                     protocolType = 'inactivation';
                     obj.logger.logInfo(sprintf('Found inactivation keywords in row %d', row));
                     break;
                 end
+            end
+        end
+
+        function s = cellToStr(~, v)
+            %CELLTOSTR Convert a cell value to char ('' for empty/missing/NaN)
+            s = '';
+            if isempty(v)
+                return;
+            end
+            if ischar(v)
+                s = v;
+            elseif isstring(v)
+                if ~ismissing(v)
+                    s = char(v);
+                end
+            elseif isnumeric(v) && ~any(isnan(v(:)))
+                s = num2str(v(1));
             end
         end
         
