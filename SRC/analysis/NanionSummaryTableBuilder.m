@@ -162,11 +162,20 @@ classdef NanionSummaryTableBuilder < handle
             rowData.Capacitance_Max_pF(rowIdx) = obj.safeExtract(stats.capacitance.max, wellIdx);
             rowData.Capacitance_Std_pF(rowIdx) = obj.safeExtract(stats.capacitance.std, wellIdx);
             
-            % 3. Current Metrics
-            rowData.Peak_Current_Mean_pA(rowIdx) = obj.safeExtract(stats.peakCurrent.mean, wellIdx);
-            rowData.Peak_Current_Min_pA(rowIdx) = obj.safeExtract(stats.peakCurrent.min, wellIdx);
-            rowData.Peak_Current_Max_pA(rowIdx) = obj.safeExtract(stats.peakCurrent.max, wellIdx);
-            rowData.Peak_Current_Std_pA(rowIdx) = obj.safeExtract(stats.peakCurrent.std, wellIdx);
+            % 3. Current Metrics (protocol-specific primary current)
+            %    activation   -> peakCurrent
+            %    inactivation -> inactivationData (test-pulse current)
+            if strcmp(protocolType, 'activation') && isfield(stats, 'peakCurrent')
+                primaryCurrent = stats.peakCurrent;
+            elseif strcmp(protocolType, 'inactivation') && isfield(stats, 'inactivationData')
+                primaryCurrent = stats.inactivationData;
+            else
+                primaryCurrent = struct('mean', NaN, 'min', NaN, 'max', NaN, 'std', NaN);
+            end
+            rowData.Peak_Current_Mean_pA(rowIdx) = obj.safeExtract(primaryCurrent.mean, wellIdx);
+            rowData.Peak_Current_Min_pA(rowIdx) = obj.safeExtract(primaryCurrent.min, wellIdx);
+            rowData.Peak_Current_Max_pA(rowIdx) = obj.safeExtract(primaryCurrent.max, wellIdx);
+            rowData.Peak_Current_Std_pA(rowIdx) = obj.safeExtract(primaryCurrent.std, wellIdx);
             
             rowData.Current_Density_Mean_pA_per_pF(rowIdx) = obj.safeExtract(stats.currentDensity.mean, wellIdx);
             rowData.Current_Density_Min_pA_per_pF(rowIdx) = obj.safeExtract(stats.currentDensity.min, wellIdx);
@@ -233,20 +242,15 @@ classdef NanionSummaryTableBuilder < handle
             end
             
             well = fittedData.wells(wellIdx);
-            
-            if strcmp(ivName, 'iv1') && ~isempty(well.iv1)
-                ivFit = well.iv1;
-            elseif strcmp(ivName, 'iv2') && ~isempty(well.iv2)
-                ivFit = well.iv2;
-            elseif strcmp(ivName, 'iv3') && isfield(well, 'iv3') && ~isempty(well.iv3)
-                ivFit = well.iv3;
-            elseif strcmp(ivName, 'iv4') && isfield(well, 'iv4') && ~isempty(well.iv4)
-                ivFit = well.iv4;
+
+            % Dynamic IV lookup — supports any number of IVs (iv1..ivN)
+            if isfield(well, ivName) && ~isempty(well.(ivName)) && isfield(well.(ivName), 'fitParams')
+                ivFit = well.(ivName);
             else
                 fitParams = [];
                 return;
             end
-            
+
             fitParams = ivFit.fitParams;
             fitParams.quality = ivFit.fitQuality;
         end
