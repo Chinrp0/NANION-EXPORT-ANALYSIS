@@ -477,9 +477,10 @@ classdef NanionSummaryFigure < handle
             cellTypeTable = passingTable(strcmp(passingTable.Cell_Type, cellType), :);
             cellTypeCompounds = unique(cellTypeTable.Compound);
 
-            % Plot every IV present: IV1 is the reference/baseline, IV2..IVN the
-            % applied-compound conditions. Line style encodes the IV, colour the
-            % compound.
+            % Plot every IV present (IV1 reference + IV2..IVN conditions): line
+            % style encodes the IV, colour the compound. The legend collapses to
+            % ONE row per compound with V_1/2 averaged across that compound's IVs
+            % (spread = std); per-IV V_1/2 lives in the exported CSV.
             ivNums = unique(cellTypeTable.IV_Number(:))';
             lineStyles = {'-', '--', ':', '-.'};
             markers = {'o', 's', '^', 'd', 'v', '>', '<', 'p'};
@@ -490,23 +491,27 @@ classdef NanionSummaryFigure < handle
             for c = 1:numel(cellTypeCompounds)
                 compound = cellTypeCompounds{c};
                 compoundColor = compoundColorMap(compound);
+
                 for ivNum = ivNums
                     d = cellTypeTable(strcmp(cellTypeTable.Compound, compound) & ...
                         cellTypeTable.IV_Number == ivNum, :);
                     if height(d) == 0; continue; end
-
                     ls = lineStyles{mod(ivNum - 1, numel(lineStyles)) + 1};
                     mk = markers{mod(ivNum - 1, numel(markers)) + 1};
-                    [h, ~] = obj.plotCompoundCurve(filteredData, fittedData, d, voltages, ...
+                    obj.plotCompoundCurve(filteredData, fittedData, d, voltages, ...
                         protocolType, compound, compoundColor, ls, mk, sprintf('IV%d', ivNum));
-
-                    vMid = mean(d.V_mid_mV, 'omitnan');
-                    vSem = std(d.V_mid_mV, 'omitnan') / sqrt(height(d));
-                    if ivNum == 1; refTag = ' ref'; else; refTag = ''; end
-                    handles = [handles; h]; %#ok<AGROW>
-                    labels = [labels; {sprintf('%s IV%d%s (n=%d, V_{1/2}=%.1f\\pm%.1f)', ...
-                        obj.formatCompoundName(compound), ivNum, refTag, height(d), vMid, vSem)}]; %#ok<AGROW>
                 end
+
+                % One legend entry per compound: clean solid swatch + aggregate V_1/2
+                dc = cellTypeTable(strcmp(cellTypeTable.Compound, compound), :);
+                if height(dc) == 0; continue; end
+                hSwatch = plot(ax, NaN, NaN, '-', 'Color', compoundColor, 'LineWidth', 2.5);
+                vMid = mean(dc.V_mid_mV, 'omitnan');
+                vStd = std(dc.V_mid_mV, 'omitnan');
+                nWells = numel(unique(dc.Well_ID));
+                handles = [handles; hSwatch]; %#ok<AGROW>
+                labels = [labels; {sprintf('%s (n=%d, V_{1/2}=%.1f\\pm%.1f)', ...
+                    obj.formatCompoundName(compound), nWells, vMid, vStd)}]; %#ok<AGROW>
             end
             hold(ax, 'off');
 
