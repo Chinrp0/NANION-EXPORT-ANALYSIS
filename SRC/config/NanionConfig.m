@@ -238,7 +238,7 @@ classdef NanionConfig < handle
             obj.configData.qc = struct(...
                 'enableReview', false, ...       % master on/off for the review step
                 'reviewMode', 'blocking', ...    % 'blocking' (pause pipeline) | 'standalone' (review saved results)
-                'decisionStore', 'sidecar');     % 'sidecar' (file per raw file) | 'central' (one store per batch)
+                'decisionStore', 'central');     % 'sidecar' (file per raw file) | 'central' (one store per batch)
         end
         
         function loadConfigFromFile(obj, configPath)
