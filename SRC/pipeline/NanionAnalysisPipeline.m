@@ -239,16 +239,23 @@ classdef NanionAnalysisPipeline < handle
         end
         
         function exportIndividualWorkbooks(obj, groupResults, protocolOutputDir)
-            %EXPORTINDIVIDUALWORKBOOKS Export Excel for each file
-            
+            %EXPORTINDIVIDUALWORKBOOKS Export one Excel workbook per file into a
+            %   single shared folder (instead of a separate timestamped folder
+            %   per file, each holding just one workbook).
+
             exporter = NanionXLSXExporter(obj.config, obj.logger);
-            
+
+            individualDir = fullfile(protocolOutputDir, 'Individual_Master_Files');
+            if ~exist(individualDir, 'dir')
+                mkdir(individualDir);
+            end
+
             for i = 1:length(groupResults)
                 result = groupResults{i};
-                
+
                 if strcmp(result.status, 'success')
                     exporter.exportSummaryTable(result.summaryTable, result.filteredData, ...
-                        result.fittedData, protocolOutputDir, result.fileName);
+                        result.fittedData, individualDir, result.fileName, false);
                 end
             end
         end
@@ -284,20 +291,20 @@ classdef NanionAnalysisPipeline < handle
                 protocolType, ...
                 false);
             
-            % Save aggregated Figure 2 page(s)
+            % Save aggregated Figure 2 (one figure per cell line)
             timestamp = datestr(now, 'yyyymmdd_HHMMSS');
-            multiPage = numel(fig2_aggregated) > 1;
             for p = 1:numel(fig2_aggregated)
                 if ~isgraphics(fig2_aggregated(p))
                     continue;
                 end
-                if multiPage
-                    figBaseName = sprintf('fig2_cell_type_averages_%s_AGGREGATED_p%d_%s', ...
-                        protocolType, p, timestamp);
-                else
-                    figBaseName = sprintf('fig2_cell_type_averages_%s_AGGREGATED_%s', ...
-                        protocolType, timestamp);
+                cellTypeName = sprintf('cellLine%d', p);
+                ud = fig2_aggregated(p).UserData;
+                if isstruct(ud) && isfield(ud, 'cellType') && ~isempty(ud.cellType)
+                    cellTypeName = ud.cellType;
                 end
+                safeCellType = regexprep(cellTypeName, '[^\w-]', '_');
+                figBaseName = sprintf('fig2_%s_%s_AGGREGATED_%s', ...
+                    protocolType, safeCellType, timestamp);
                 obj.saveFigure(fig2_aggregated(p), protocolOutputDir, figBaseName);
             end
             if ~isempty(fig2_aggregated)

@@ -14,7 +14,7 @@ classdef NanionXLSXExporter < handle
             obj.logger = logger;
         end
         
-        function outputPath = exportSummaryTable(obj, summaryTable, filteredData, fittedData, baseOutputDir, fileName)
+        function outputPath = exportSummaryTable(obj, summaryTable, filteredData, fittedData, baseOutputDir, fileName, useSubfolder)
             %EXPORTSUMMARYTABLE Export single file to comprehensive multi-sheet workbook
             %   Creates organized workbook with:
             %     - Summary Statistics sheet
@@ -22,8 +22,25 @@ classdef NanionXLSXExporter < handle
             %     - Per-IV sheets
             %     - Grouped sheets
             %     - Fit Quality Report sheet
-            
-            outputPath = obj.createTimestampedFolder(baseOutputDir);
+            %
+            %   useSubfolder (default true): when true, writes into a fresh
+            %   timestamped subfolder of baseOutputDir. Pass false to write
+            %   directly into baseOutputDir (e.g. a shared Individual_Master_Files
+            %   folder) so per-file workbooks are not each isolated in their own
+            %   single-file folder.
+
+            if nargin < 7
+                useSubfolder = true;
+            end
+
+            if useSubfolder
+                outputPath = obj.createTimestampedFolder(baseOutputDir);
+            else
+                outputPath = baseOutputDir;
+                if ~exist(outputPath, 'dir')
+                    mkdir(outputPath);
+                end
+            end
             obj.logger.logInfo(sprintf('Exporting comprehensive workbook to: %s', outputPath));
             
             [~, baseFileName, ~] = fileparts(fileName);

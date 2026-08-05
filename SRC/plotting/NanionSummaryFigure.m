@@ -401,17 +401,19 @@ classdef NanionSummaryFigure < handle
 
         function figHandles = createAggregatedCellTypeAveragesFigure(obj, filteredData, fittedData, summaryTable, protocolType, includePoorFits)
             %CREATEAGGREGATEDCELLTYPEAVERAGESFIGURE Generate Figure 2 from multiple files
-            %   One panel per cell type in a grid, paginated across figures.
-            %   Returns an ARRAY of figure handles (one per page).
-            
+            %   ONE FIGURE PER CELL LINE (cell type) so the individual traces
+            %   are easy to see. Returns an ARRAY of figure handles (one per
+            %   cell type); each figure carries UserData.cellType for naming
+            %   the saved file.
+
             if nargin < 6
                 includePoorFits = false;
             end
-            
-            obj.logger.logInfo('Creating AGGREGATED cell type averages figure...');
-            
+
+            obj.logger.logInfo('Creating AGGREGATED cell type averages figure(s)...');
+
             voltages = filteredData.protocolInfo.voltages;
-            
+
             % Filter by quality
             if includePoorFits == 2
                 passingMask = true(height(summaryTable), 1);
@@ -423,50 +425,44 @@ classdef NanionSummaryFigure < handle
                 passingMask = strcmp(summaryTable.Fit_Quality, 'Good') | ...
                               strcmp(summaryTable.Fit_Quality, 'Acceptable');
             end
-            
+
             passingTable = summaryTable(passingMask, :);
-            
+
             if height(passingTable) == 0
                 obj.logger.logWarning('No passing fits for aggregated figure');
                 figHandles = gobjects(0);
                 return;
             end
-            
+
             uniqueCellTypes = unique(passingTable.Cell_Type);
             numCellTypes = length(uniqueCellTypes);
-            
-            obj.logger.logInfo(sprintf('Aggregated figure: %d cell types, %d total rows', ...
+
+            obj.logger.logInfo(sprintf('Aggregated figure: %d cell line(s), %d total rows', ...
                 numCellTypes, height(passingTable)));
-            
-            % Grid + pagination (tunable via config.plotting.panelCols/panelRows)
+
+            % One full-size panel per cell line so individual traces stay legible.
             compoundColorMap = obj.assignCompoundColors(unique(passingTable.Compound));
-            panelCols = 2; panelRows = 2;
-            if isfield(obj.config.plotting, 'panelCols'); panelCols = obj.config.plotting.panelCols; end
-            if isfield(obj.config.plotting, 'panelRows'); panelRows = obj.config.plotting.panelRows; end
-            panelsPerPage = max(1, panelCols * panelRows);
-            numPages = ceil(numCellTypes / panelsPerPage);
 
-            figHandles = gobjects(numPages, 1);
-            for page = 1:numPages
-                fig = figure('Position', [50, 50, 640 * panelCols, 460 * panelRows], ...
+            figHandles = gobjects(numCellTypes, 1);
+            for k = 1:numCellTypes
+                cellType = uniqueCellTypes{k};
+
+                fig = figure('Position', [50, 50, 1000, 720], ...
                     'Color', 'w', 'Visible', 'off', ...
-                    'Name', sprintf('Cell Type Averages - AGGREGATED (%s) %d/%d', protocolType, page, numPages));
-                figHandles(page) = fig;
+                    'Name', sprintf('Cell Line Average - %s (%s)', char(cellType), protocolType));
+                fig.UserData = struct('cellType', char(cellType));
+                figHandles(k) = fig;
 
-                firstCT = (page - 1) * panelsPerPage + 1;
-                lastCT = min(page * panelsPerPage, numCellTypes);
-                for k = firstCT:lastCT
-                    ax = subplot(panelRows, panelCols, k - firstCT + 1);
-                    obj.plotCellTypePanel(ax, uniqueCellTypes{k}, passingTable, filteredData, ...
-                        fittedData, voltages, protocolType, compoundColorMap);
-                end
+                ax = axes('Parent', fig, 'Position', [0.10, 0.11, 0.86, 0.80]);
+                obj.plotCellTypePanel(ax, cellType, passingTable, filteredData, ...
+                    fittedData, voltages, protocolType, compoundColorMap);
 
-                sgtitle(sprintf('%s Protocol: Cell Type Comparison (AGGREGATED) — page %d/%d', ...
-                    protocolType, page, numPages), 'FontSize', 16, 'FontWeight', 'bold');
+                sgtitle(fig, sprintf('%s Protocol — Cell Line Average (AGGREGATED)', protocolType), ...
+                    'FontSize', 15, 'FontWeight', 'bold');
             end
 
-            obj.logger.logInfo(sprintf('✓ Aggregated figure(s) created: %d cell types across %d page(s)', ...
-                numCellTypes, numPages));
+            obj.logger.logInfo(sprintf('✓ Aggregated figure(s) created: one per cell line (%d total)', ...
+                numCellTypes));
         end
 
         function plotCellTypePanel(obj, ax, cellType, passingTable, filteredData, fittedData, voltages, protocolType, compoundColorMap)
