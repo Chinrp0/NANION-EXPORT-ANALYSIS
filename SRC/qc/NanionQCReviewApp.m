@@ -100,15 +100,22 @@ classdef NanionQCReviewApp < handle
         end
 
         function keepCurrent(obj)
-            obj.setCurrentVerdict('keep');
+            % Keep + advance to the next well so the user can review quickly.
+            obj.setCurrentVerdict('keep', true);
         end
 
         function rejectCurrent(obj)
-            obj.setCurrentVerdict('reject');
+            obj.setCurrentVerdict('reject', true);
         end
 
         function resetCurrent(obj)
-            obj.setCurrentVerdict('auto');
+            % Reset is a correction, not a decision — stay on the well.
+            obj.setCurrentVerdict('auto', false);
+        end
+
+        function idx = currentWellIndex(obj)
+            %CURRENTWELLINDEX Global index of the well currently shown (0 if none).
+            if isempty(obj.selectedWell); idx = 0; else; idx = obj.selectedWell; end
         end
 
         function finish(obj)
@@ -130,7 +137,7 @@ classdef NanionQCReviewApp < handle
 
             gl = uigridlayout(obj.fig, [3 2]);
             gl.RowHeight = {30, '1x', 40};
-            gl.ColumnWidth = {360, '1x'};
+            gl.ColumnWidth = {470, '1x'};
 
             % --- header row ---
             obj.statusLbl = uilabel(gl, 'Text', '', 'FontWeight', 'bold');
@@ -151,8 +158,8 @@ classdef NanionQCReviewApp < handle
 
             obj.tbl = uitable(leftGl);
             obj.tbl.Layout.Row = 2;
-            obj.tbl.ColumnName = {'Well', 'Auto', 'User', 'Final'};
-            obj.tbl.ColumnWidth = {90, 60, 60, 60};
+            obj.tbl.ColumnName = {'Well', 'Auto', 'User', 'Final', 'Reject reason'};
+            obj.tbl.ColumnWidth = {80, 55, 55, 55, 190};
             obj.tbl.SelectionType = 'row';
             obj.tbl.Multiselect = 'off';
             obj.tbl.CellSelectionCallback = @(src, ev) obj.onTableSelect(ev);
@@ -248,7 +255,7 @@ classdef NanionQCReviewApp < handle
             %REFRESHTABLE Rebuild navigator rows for the current filter + recolour.
             obj.rowToWell = obj.filteredWellIndices();
             nRows = numel(obj.rowToWell);
-            data = cell(nRows, 4);
+            data = cell(nRows, 5);
             keepFlags = obj.finalKeepFlags();
             for r = 1:nRows
                 gi = obj.rowToWell(r);
@@ -260,10 +267,17 @@ classdef NanionQCReviewApp < handle
                 else
                     autoV = d.autoVerdict; userV = d.userVerdict; finalV = d.finalVerdict;
                 end
+                reasons = obj.assessedData.verdicts(gi).reasons;
+                if isempty(reasons)
+                    reasonStr = '';
+                else
+                    reasonStr = strjoin(cellstr(reasons), ', ');
+                end
                 data{r, 1} = char(obj.wellIDs(gi));
                 data{r, 2} = autoV;
                 data{r, 3} = userV;
                 data{r, 4} = finalV;
+                data{r, 5} = reasonStr;
             end
             obj.tbl.Data = data;
             obj.applyRowColors(keepFlags);
@@ -302,13 +316,39 @@ classdef NanionQCReviewApp < handle
             end
         end
 
-        function setCurrentVerdict(obj, verdict)
+        function setCurrentVerdict(obj, verdict, advance)
+            %SETCURRENTVERDICT Record a verdict for the selected well.
+            %   advance=true moves to the next navigator row afterwards.
+            if nargin < 3; advance = false; end
             if isempty(obj.selectedWell); return; end
-            key = obj.wellKeys(obj.selectedWell);
-            obj.session.setUserVerdict(key, verdict);
+            actedWell = obj.selectedWell;
+            prevRow = find(obj.rowToWell == actedWell, 1);
+            obj.session.setUserVerdict(obj.wellKeys(actedWell), verdict);
             obj.refreshTable();
-            obj.updateInfo();
             obj.updateStatus();
+            if advance
+                obj.advanceSelection(actedWell, prevRow);
+            else
+                obj.updateInfo();
+            end
+        end
+
+        function advanceSelection(obj, actedWell, prevRow)
+            %ADVANCESELECTION Select the next well in the current filter view.
+            %   If the acted well stayed in the filter, move to the row after it;
+            %   if the override pushed it out of the filter, the next well now sits
+            %   at the acted well's old row position.
+            if isempty(obj.rowToWell); return; end
+            stillRow = find(obj.rowToWell == actedWell, 1);
+            if ~isempty(stillRow)
+                nextRow = stillRow + 1;
+            elseif ~isempty(prevRow)
+                nextRow = prevRow;
+            else
+                nextRow = 1;
+            end
+            nextRow = min(max(nextRow, 1), numel(obj.rowToWell));
+            obj.selectWellByIndex(obj.rowToWell(nextRow));
         end
 
         function buildIVBlankBoxes(obj)
