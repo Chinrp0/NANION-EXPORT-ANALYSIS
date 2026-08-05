@@ -120,6 +120,25 @@ classdef NanionBoltzmannFitter < handle
                 summary.fitResults.poor, summary.fitResults.failed));
         end
         
+        function subset = subsetFitted(obj, fittedData, keepMask)
+            %SUBSETFITTED Keep only the wells selected by keepMask.
+            %   fittedData.wells is aligned 1:1 with the well order that was fit,
+            %   so a logical/index mask over that order yields a fittedData whose
+            %   .wells line up with the post-decision filteredData.wellIDs. The
+            %   summary counts are regenerated from the surviving wells.
+            keepMask = logical(keepMask(:));
+            if numel(keepMask) ~= numel(fittedData.wells)
+                error('NanionBoltzmannFitter:MaskMismatch', ...
+                    'keepMask length (%d) must match number of fitted wells (%d)', ...
+                    numel(keepMask), numel(fittedData.wells));
+            end
+
+            subset = fittedData;
+            subset.wells = fittedData.wells(keepMask);
+            subset.numWells = numel(subset.wells);
+            subset.summary = obj.generateFitSummary(subset.wells, fittedData.ivNames);
+        end
+
         function wellFit = fitSingleWell(obj, voltages, data, protocolType, ivUsed)
             %FITSINGLEWELL Fit one well with DETAILED error logging
             

@@ -13,6 +13,8 @@ classdef NanionAnalysisPipeline < handle
         dataExtractor
         results
         cache
+        reviewSession    % QCReviewSession (created lazily when qc.enableReview)
+        reviewStoreDir   % directory holding the persisted qc decisions
     end
     
     methods
@@ -64,9 +66,13 @@ classdef NanionAnalysisPipeline < handle
             if ~exist(outputDir, 'dir')
                 mkdir(outputDir);
             end
-            
+
             obj.logger.logInfo(sprintf('Starting analysis of %d file(s)', length(filePaths)));
             obj.logger.logInfo(sprintf('Output directory: %s', outputDir));
+
+            % Set up the QC review session (loads any prior decisions so
+            % overrides survive across runs). Only when review is enabled.
+            obj.initReviewSession(outputDir);
             
             try
                 % Phase 1: Validate and categorize files
@@ -507,23 +513,33 @@ classdef NanionAnalysisPipeline < handle
                 obj.logger.logInfo('Step 2: Extracting measurements...');
                 extractedData = obj.dataExtractor.extractMeasurements(parsedData);
                 
-                % Step 3: Apply quality filters
-                obj.logger.logInfo('Step 3: Applying quality filters...');
-                filteredData = obj.dataExtractor.applyQualityFilters(extractedData);
-                
-                obj.logger.logInfo(sprintf('Quality filtering: %d/%d wells passed (%.1f%%)', ...
-                    filteredData.numWellsPassed, filteredData.numWellsTotal, ...
-                    100 * filteredData.numWellsPassed / filteredData.numWellsTotal));
-                
-                % Step 4: Calculate sweep statistics
-                obj.logger.logInfo('Step 4: Calculating sweep statistics...');
-                filteredData = obj.dataExtractor.calculateSweepStatistics(filteredData);
-                
-                % Step 5: Fit Boltzmann curves
-                obj.logger.logInfo('Step 5: Fitting Boltzmann curves...');
+                % Step 3: Assess quality (annotate EVERY well; discard nothing)
+                obj.logger.logInfo('Step 3: Assessing well quality...');
+                assessedData = obj.dataExtractor.assessQuality(extractedData);
+
+                % Step 4: Fit Boltzmann curves for ALL wells BEFORE any decision,
+                % so rejected wells still have a fit to display during review.
+                obj.logger.logInfo('Step 4: Fitting Boltzmann curves (all wells)...');
+                allData = obj.dataExtractor.applyDecisions(assessedData, ...
+                    true(extractedData.numWells, 1));
                 fitter = NanionBoltzmannFitter(obj.config, obj.logger);
-                fittedData = fitter.fitBoltzmann(filteredData);
-                
+                fittedAll = fitter.fitBoltzmann(allData);
+
+                % Step 5: Review — user may override auto verdicts. In blocking
+                % mode the pipeline pauses here and launches the review app; when
+                % review is disabled this returns the automatic keep mask.
+                obj.logger.logInfo('Step 5: QC review / decision...');
+                keepMask = obj.runReview(assessedData, fittedAll);
+
+                % Step 6: Apply final decisions -> kept wells only, then compute
+                % sweep statistics and align the fits to the surviving wells.
+                filteredData = obj.dataExtractor.applyDecisions(assessedData, keepMask);
+                filteredData = obj.dataExtractor.calculateSweepStatistics(filteredData);
+                fittedData = fitter.subsetFitted(fittedAll, keepMask);
+
+                obj.logger.logInfo(sprintf('Quality decisions: %d/%d wells kept (%.1f%%)', ...
+                    filteredData.numWellsPassed, filteredData.numWellsTotal, ...
+                    100 * filteredData.numWellsPassed / max(filteredData.numWellsTotal, 1)));
                 obj.logger.logInfo(sprintf('Boltzmann fitting: %d Good, %d Acceptable, %d Poor, %d Failed', ...
                     fittedData.summary.fitResults.good, ...
                     fittedData.summary.fitResults.acceptable, ...
@@ -610,6 +626,71 @@ classdef NanionAnalysisPipeline < handle
     methods (Access = private)
         function fileName = extractFileName(~, filePath)
             [~, fileName, ~] = fileparts(filePath);
+        end
+
+        function initReviewSession(obj, outputDir)
+            %INITREVIEWSESSION Create + preload the QC review session (if enabled).
+            if ~obj.config.qc.enableReview
+                obj.reviewSession = [];
+                return;
+            end
+            obj.reviewStoreDir = outputDir;
+            obj.reviewSession = QCReviewSession(obj.config, obj.logger);
+            obj.reviewSession.load(obj.reviewStoreDir);
+        end
+
+        function keepMask = runReview(obj, assessedData, fittedAll)
+            %RUNREVIEW Resolve the final keep mask for one file's assessed wells.
+            %   Branches on config.qc: review disabled -> automatic verdicts;
+            %   'blocking' -> launch the review app and wait; 'standalone' ->
+            %   persist a review bundle for later and proceed with current
+            %   decisions (auto, or any overrides reloaded from disk).
+
+            if ~obj.config.qc.enableReview || isempty(obj.reviewSession)
+                keepMask = assessedData.autoKeepMask;
+                return;
+            end
+
+            session = obj.reviewSession;
+            session.ingestAssessment(assessedData);
+
+            switch lower(obj.config.qc.reviewMode)
+                case 'blocking'
+                    obj.logger.logInfo('QC review (blocking): launching review app...');
+                    app = NanionQCReviewApp(obj.config, obj.logger, session, ...
+                        assessedData, fittedAll);
+                    app.waitForCompletion();
+                    keepMask = session.keepMaskFor(assessedData);
+
+                case 'standalone'
+                    obj.saveReviewBundle(assessedData, fittedAll);
+                    keepMask = session.keepMaskFor(assessedData);
+                    obj.logger.logInfo(['QC review (standalone): saved bundle; ' ...
+                        'run run_qc_review to review, then re-run to apply.']);
+
+                otherwise
+                    obj.logger.logWarning(sprintf(...
+                        'Unknown qc.reviewMode "%s"; using automatic verdicts', ...
+                        obj.config.qc.reviewMode));
+                    keepMask = assessedData.autoKeepMask;
+            end
+
+            session.save(obj.reviewStoreDir);
+        end
+
+        function saveReviewBundle(obj, assessedData, fittedAll)
+            %SAVEREVIEWBUNDLE Persist assessed+fitted data for standalone review.
+            %   One bundle per file (keyed by fileName) so run_qc_review can
+            %   reload the exact plots the user needs to see.
+            bundleDir = fullfile(obj.reviewStoreDir, 'qc_review_bundles');
+            if ~exist(bundleDir, 'dir'); mkdir(bundleDir); end
+            bundle = struct('assessedData', assessedData, ...
+                'fittedData', fittedAll, ...
+                'fileName', char(assessedData.fileName)); %#ok<NASGU>
+            safeName = matlab.lang.makeValidName(char(assessedData.fileName));
+            bundleFile = fullfile(bundleDir, [safeName '_qc_bundle.mat']);
+            save(bundleFile, 'bundle', '-v7.3');
+            obj.logger.logInfo(sprintf('QCReviewSession: saved review bundle -> %s', bundleFile));
         end
 
         function ensureAnalysisPathAvailable(obj)
