@@ -517,25 +517,39 @@ classdef NanionAnalysisPipeline < handle
                 obj.logger.logInfo('Step 3: Assessing well quality...');
                 assessedData = obj.dataExtractor.assessQuality(extractedData);
 
-                % Step 4: Fit Boltzmann curves for ALL wells BEFORE any decision,
-                % so rejected wells still have a fit to display during review.
-                obj.logger.logInfo('Step 4: Fitting Boltzmann curves (all wells)...');
-                allData = obj.dataExtractor.applyDecisions(assessedData, ...
-                    true(extractedData.numWells, 1));
+                % Step 4: Fit Boltzmann curves. When review is enabled we must fit
+                % ALL wells so rejected wells still have a curve to display; when it
+                % is disabled we fit only the auto-kept wells (the original, faster
+                % behaviour — no point fitting wells that will be discarded).
+                reviewOn = obj.config.qc.enableReview;
+                if reviewOn
+                    fitMask = true(extractedData.numWells, 1);
+                    obj.logger.logInfo('Step 4: Fitting Boltzmann curves (all wells, review enabled)...');
+                else
+                    fitMask = assessedData.autoKeepMask;
+                    obj.logger.logInfo('Step 4: Fitting Boltzmann curves (auto-kept wells)...');
+                end
+                fitInput = obj.dataExtractor.applyDecisions(assessedData, fitMask);
                 fitter = NanionBoltzmannFitter(obj.config, obj.logger);
-                fittedAll = fitter.fitBoltzmann(allData);
+                fittedForReview = fitter.fitBoltzmann(fitInput);
 
-                % Step 5: Review — user may override auto verdicts. In blocking
-                % mode the pipeline pauses here and launches the review app; when
-                % review is disabled this returns the automatic keep mask.
+                % Step 5: Review — user may override auto verdicts. In blocking mode
+                % the pipeline pauses here and launches the review app; when review
+                % is disabled this returns the automatic keep mask unchanged.
                 obj.logger.logInfo('Step 5: QC review / decision...');
-                keepMask = obj.runReview(assessedData, fittedAll);
+                keepMask = obj.runReview(assessedData, fittedForReview);
 
                 % Step 6: Apply final decisions -> kept wells only, then compute
                 % sweep statistics and align the fits to the surviving wells.
                 filteredData = obj.dataExtractor.applyDecisions(assessedData, keepMask);
                 filteredData = obj.dataExtractor.calculateSweepStatistics(filteredData);
-                fittedData = fitter.subsetFitted(fittedAll, keepMask);
+                if reviewOn
+                    % fittedForReview is aligned to ALL wells; subset to the kept set.
+                    fittedData = fitter.subsetFitted(fittedForReview, keepMask);
+                else
+                    % fittedForReview was already fit over exactly the kept wells.
+                    fittedData = fittedForReview;
+                end
 
                 obj.logger.logInfo(sprintf('Quality decisions: %d/%d wells kept (%.1f%%)', ...
                     filteredData.numWellsPassed, filteredData.numWellsTotal, ...
